@@ -1,0 +1,7 @@
+import { ArrowUpRight, PanelTop } from 'lucide-react'
+import { Link } from 'react-router-dom'
+import { useEffect } from 'react'
+export default function PagePlaceholder({ title, description = 'Your workspace is ready. This module will connect to live gym data in the next build sessions.', links = [] }: { title: string; description?: string; links?: { label: string; to: string }[] }) {
+  useEffect(() => { document.title = title + ' · FitStack' }, [title])
+  return <section><p className="mb-3 text-xs font-medium uppercase tracking-[.18em] text-muted-foreground">FitStack / Workspace</p><h1 className="text-3xl font-semibold tracking-tight sm:text-4xl">{title}</h1><p className="mt-3 max-w-xl text-sm leading-6 text-muted-foreground">{description}</p><div className="mt-9 rounded-2xl border bg-card px-6 py-16 sm:px-10"><div className="flex size-12 items-center justify-center rounded-xl border bg-muted"><PanelTop className="text-muted-foreground" size={22}/></div><h2 className="mt-5 text-lg font-medium">{title} workspace</h2><p className="mt-2 max-w-md text-sm leading-6 text-muted-foreground">This is a working route placeholder for Module 1. Data and operational actions will be added in the corresponding module.</p>{links.length > 0 && <div className="mt-6 flex flex-wrap gap-3">{links.map(l => <Link key={l.to} to={l.to} className="inline-flex min-h-11 items-center gap-2 rounded-lg border px-4 text-sm font-medium hover:bg-muted">{l.label}<ArrowUpRight size={15}/></Link>)}</div>}</div></section>
+}

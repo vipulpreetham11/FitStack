@@ -1,0 +1,12 @@
+import { StrictMode } from 'react'
+import { createRoot } from 'react-dom/client'
+import { BrowserRouter } from 'react-router-dom'
+import { Toaster } from 'sonner'
+import { TooltipProvider } from '@/components/ui/tooltip'
+import { ThemeProvider } from '@/contexts/ThemeContext'
+import { AuthProvider } from '@/contexts/AuthContext'
+import { GymProvider } from '@/contexts/GymContext'
+import App from './App'
+import ErrorBoundary from '@/components/ErrorBoundary'
+import './index.css'
+createRoot(document.getElementById('root')!).render(<StrictMode><ThemeProvider><TooltipProvider><AuthProvider><GymProvider><BrowserRouter><ErrorBoundary><App/><Toaster richColors/></ErrorBoundary></BrowserRouter></GymProvider></AuthProvider></TooltipProvider></ThemeProvider></StrictMode>)

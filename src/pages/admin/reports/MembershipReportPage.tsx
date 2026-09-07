@@ -1,0 +1,28 @@
+import { useMemo, useState } from 'react'
+import { CalendarClock, CircleCheck, CircleOff, Clock3, Snowflake, UserPlus } from 'lucide-react'
+import { Bar, BarChart, Legend, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
+import ReportsNav from '@/components/reports/ReportsNav'
+import { ReportControls } from '@/components/reports/ReportControls'
+import ReportMetric from '@/components/reports/ReportMetric'
+import { Badge } from '@/components/ui/badge'
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
+import { useGym } from '@/hooks/useGym'
+import { useMembershipReport, type DateRange, type ReportPeriod } from '@/hooks/useReports'
+import { exportData } from '@/lib/export'
+import { formatCurrency, formatDate } from '@/lib/format'
+import { toDateOnly } from '@/lib/membership'
+
+export default function MembershipReportPage() {
+  const { gym } = useGym(); const [period, setPeriod] = useState<ReportPeriod>('month'); const [custom, setCustom] = useState<DateRange>({ from: `${toDateOnly().slice(0, 7)}-01`, to: toDateOnly() }); const [status, setStatus] = useState('all'); const [plan, setPlan] = useState('all')
+  const report = useMembershipReport(period, custom); const plans = useMemo(() => [...new Map(report.data.map(r => [r.planId, r.plan])).entries()].filter(([id]) => id), [report.data]); const rows = report.rows.filter(r => (status === 'all' || r.status === status) && (plan === 'all' || r.planId === plan))
+  const exportRows = () => void exportData(rows.map(r => ({ Member: r.member, Plan: r.plan, Status: r.status, 'Start Date': r.startDate, 'End Date': r.endDate, 'Days Remaining': r.daysRemaining, 'Amount Paid': r.amountPaid })), `Memberships_${gym?.name ?? 'FitStack'}_${report.range.from}_${report.range.to}`, 'xlsx')
+  return <div className="space-y-6 pb-10"><div><h1 className="text-3xl font-semibold tracking-tight">Reports</h1><p className="mt-1 text-muted-foreground">Membership health and lifecycle trends.</p></div><ReportsNav /><ReportControls period={period} from={custom.from} to={custom.to} onPeriod={setPeriod} onFrom={from => setCustom(v => ({ ...v, from }))} onTo={to => setCustom(v => ({ ...v, to }))} onExport={exportRows} />
+    {report.error && <div role="alert" className="rounded-lg border border-destructive/30 p-3 text-sm text-destructive">{report.error}</div>}
+    <div className="grid grid-cols-2 gap-4 lg:grid-cols-3 xl:grid-cols-6"><ReportMetric label="Active" value={report.summary.active} icon={CircleCheck} loading={report.loading} /><ReportMetric label="Scheduled" value={report.summary.scheduled} icon={CalendarClock} loading={report.loading} /><ReportMetric label="Frozen" value={report.summary.frozen} icon={Snowflake} loading={report.loading} /><ReportMetric label="Expired this month" value={report.summary.expired} icon={Clock3} loading={report.loading} /><ReportMetric label="Cancelled this month" value={report.summary.cancelled} icon={CircleOff} loading={report.loading} /><ReportMetric label="New this month" value={report.summary.newCount} icon={UserPlus} loading={report.loading} /></div>
+    <Card><CardHeader><CardTitle className="text-base">Status by start month</CardTitle></CardHeader><CardContent><ResponsiveContainer width="100%" height={280}><BarChart data={report.chart}><XAxis dataKey="month" /><YAxis allowDecimals={false} /><Tooltip /><Legend /><Bar stackId="status" dataKey="active" fill="#16a34a" /><Bar stackId="status" dataKey="scheduled" fill="#2563eb" /><Bar stackId="status" dataKey="frozen" fill="#7c3aed" /><Bar stackId="status" dataKey="expired" fill="#64748b" /><Bar stackId="status" dataKey="cancelled" fill="#dc2626" /></BarChart></ResponsiveContainer></CardContent></Card>
+    <div className="flex flex-col gap-3 sm:flex-row"><Select value={status} onValueChange={value => value && setStatus(value)}><SelectTrigger className="w-full sm:w-44"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="all">All statuses</SelectItem>{['active','scheduled','frozen','expired','cancelled'].map(v => <SelectItem key={v} value={v}>{v}</SelectItem>)}</SelectContent></Select><Select value={plan} onValueChange={value => value && setPlan(value)}><SelectTrigger className="w-full sm:w-52"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="all">All plans</SelectItem>{plans.map(([id, name]) => <SelectItem key={id} value={id}>{name}</SelectItem>)}</SelectContent></Select></div>
+    <Card><CardContent className="p-0"><div className="overflow-x-auto"><Table><TableHeader><TableRow><TableHead>Member</TableHead><TableHead>Plan</TableHead><TableHead>Status</TableHead><TableHead>Start</TableHead><TableHead>End</TableHead><TableHead>Days left</TableHead><TableHead>Amount paid</TableHead></TableRow></TableHeader><TableBody>{rows.map(r => <TableRow key={r.id}><TableCell className="font-medium">{r.member}</TableCell><TableCell>{r.plan}</TableCell><TableCell><Badge variant="secondary" className="capitalize">{r.status}</Badge></TableCell><TableCell>{formatDate(r.startDate)}</TableCell><TableCell>{formatDate(r.endDate)}</TableCell><TableCell>{r.status === 'frozen' ? 'Paused' : r.daysRemaining}</TableCell><TableCell>{formatCurrency(r.amountPaid)}</TableCell></TableRow>)}{!report.loading && !rows.length && <TableRow><TableCell colSpan={7} className="h-24 text-center text-muted-foreground">No memberships match these filters.</TableCell></TableRow>}</TableBody></Table></div></CardContent></Card>
+  </div>
+}
