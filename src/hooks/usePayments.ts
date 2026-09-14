@@ -3,10 +3,12 @@ import { FunctionsHttpError } from '@supabase/supabase-js'
 import { supabase } from '@/lib/supabase'
 import { useGym } from '@/hooks/useGym'
 import { toDateOnly } from '@/lib/membership'
+import { parsePaymentResult } from '@/lib/payment'
 import type { Database } from '@/types/database'
 
 type PaymentRow = Database['public']['Tables']['payments']['Row']
-export type Payment = PaymentRow & {
+type SafePaymentRow = Omit<PaymentRow, 'razorpay_signature' | 'metadata'>
+export type Payment = SafePaymentRow & {
   member: { id: string; profiles: { full_name: string; phone: string | null; email: string | null } | null } | null
   invoice: { id: string; invoice_number: string } | null
 }
@@ -36,6 +38,9 @@ export type OrderResult = PricingBreakdown & {
 }
 
 type OrderInput = { planId: string; memberId: string; startDate: string; promoCode?: string }
+export type CheckoutMembership = { id: string; status: 'active' | 'frozen' | 'scheduled' }
+
+export const isPaymentDevMode = import.meta.env.DEV || import.meta.env.VITE_DEV_MODE === 'true'
 
 async function functionMessage(error: unknown) {
   if (error instanceof FunctionsHttpError) {
@@ -45,15 +50,19 @@ async function functionMessage(error: unknown) {
 }
 
 export function usePayments() {
-  const { gym } = useGym()
+  const { gym, gymMember } = useGym()
+  const ownPaymentsOnly = gym?.role === 'member' || gym?.role === 'trainer'
+  const gymMemberId = gymMember?.id ?? null
   const [payments, setPayments] = useState<Payment[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
   const refresh = useCallback(async () => {
-    if (!gym || !supabase) { setPayments([]); setLoading(false); return }
+    if (!gym || !supabase || (ownPaymentsOnly && !gymMemberId)) { setPayments([]); setLoading(false); return }
     setLoading(true); setError(null)
-    const { data, error: queryError } = await (supabase as any).from('payments').select(`*, member:gym_members!payments_member_id_fkey(id,profiles(full_name,phone,email)), invoice:invoices!invoices_payment_id_fkey(id,invoice_number)`).eq('gym_id', gym.gym_id).order('created_at', { ascending: false })
+    let query = (supabase as any).from('payments').select(`id,gym_id,member_id,plan_id,requested_start_date,amount,discount_amount,taxable_amount,gst_rate,cgst_amount,sgst_amount,total_amount,currency,razorpay_order_id,razorpay_payment_id,status,promo_code_id,description,created_by,created_at,updated_at,member:gym_members!payments_member_id_fkey(id,profiles(full_name,phone,email)),invoice:invoices!invoices_payment_id_fkey(id,invoice_number)`).eq('gym_id', gym.gym_id)
+    if (ownPaymentsOnly) query = query.eq('member_id', gymMemberId)
+    const { data, error: queryError } = await query.order('created_at', { ascending: false })
     if (queryError) setError(queryError.message)
     else setPayments((data ?? []).map((row: any) => ({
       ...row,
@@ -61,19 +70,31 @@ export function usePayments() {
       invoice: Array.isArray(row.invoice) ? row.invoice[0] ?? null : row.invoice ?? null,
     })) as Payment[])
     setLoading(false)
-  }, [gym])
+  }, [gym, gymMemberId, ownPaymentsOnly])
 
   useEffect(() => { void refresh() }, [refresh])
 
   const invokeOrder = useCallback(async (input: OrderInput, preview: boolean): Promise<OrderResult> => {
     if (!gym || !supabase) throw new Error('Supabase is not configured')
+    if (isPaymentDevMode) {
+      const { data, error: rpcError } = await supabase.rpc('simulate_payment_checkout', {
+        p_gym_id: gym.gym_id,
+        p_member_id: input.memberId,
+        p_plan_id: input.planId,
+        p_start_date: input.startDate,
+        p_promo_code: input.promoCode?.trim().toUpperCase() || null,
+        p_preview: preview,
+      })
+      if (rpcError) throw rpcError
+      return parsePaymentResult<OrderResult>(data)
+    }
     const { data, error: invokeError } = await supabase.functions.invoke('create-razorpay-order', { body: {
       gym_id: gym.gym_id, member_id: input.memberId, plan_id: input.planId, start_date: input.startDate,
       promo_code: input.promoCode?.trim().toUpperCase() || null, preview,
     } })
     if (invokeError) throw new Error(await functionMessage(invokeError))
     if (data?.error) throw new Error(String(data.error))
-    return data as OrderResult
+    return parsePaymentResult<OrderResult>(data)
   }, [gym])
 
   const createOrder = useCallback(async (input: OrderInput) => {
@@ -83,6 +104,23 @@ export function usePayments() {
   }, [invokeOrder, refresh])
 
   const previewOrder = useCallback((input: OrderInput) => invokeOrder(input, true), [invokeOrder])
+
+  const reconcileCompletedCheckout = useCallback(async (input: OrderInput, attemptedAfter: string): Promise<CheckoutMembership | null> => {
+    if (!gym || !supabase) return null
+    const { data, error: queryError } = await supabase
+      .from('memberships')
+      .select('id, status')
+      .eq('gym_id', gym.gym_id)
+      .eq('member_id', input.memberId)
+      .eq('plan_id', input.planId)
+      .in('status', ['active', 'frozen', 'scheduled'])
+      .gte('created_at', attemptedAfter)
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle()
+    if (queryError || !data) return null
+    return data as CheckoutMembership
+  }, [gym])
 
   const handlePaymentSuccess = useCallback(async (paymentId: string) => {
     if (!gym || !supabase) throw new Error('Supabase is not configured')
@@ -112,5 +150,5 @@ export function usePayments() {
     }
   }, [payments])
 
-  return { payments, loading, error, refresh, previewOrder, createOrder, handlePaymentSuccess, handleFreeCheckout, stats }
+  return { payments, loading, error, refresh, previewOrder, createOrder, reconcileCompletedCheckout, handlePaymentSuccess, handleFreeCheckout, stats }
 }

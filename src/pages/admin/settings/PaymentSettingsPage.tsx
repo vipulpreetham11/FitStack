@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState } from 'react'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
@@ -34,22 +34,6 @@ export default function PaymentSettingsPage() {
       razorpay_webhook_secret: '',
     },
   })
-
-  useEffect(() => {
-    async function loadGymSettings() {
-      if (gym && supabase) {
-        const { data } = await supabase.from('gyms').select('razorpay_key_id_enc, razorpay_key_secret_enc, razorpay_webhook_secret_enc').eq('id', gym.gym_id).single()
-        if (data) {
-          form.reset({
-            razorpay_key_id: data.razorpay_key_id_enc || '',
-            razorpay_key_secret: data.razorpay_key_secret_enc || '',
-            razorpay_webhook_secret: data.razorpay_webhook_secret_enc || '',
-          })
-        }
-      }
-    }
-    loadGymSettings()
-  }, [gym, form])
 
   async function onSubmit(data: FormValues) {
     if (!gym || !supabase || !canEdit) return
@@ -109,7 +93,7 @@ export default function PaymentSettingsPage() {
       <Card>
         <CardHeader>
           <CardTitle>Payment Gateway</CardTitle>
-          <CardDescription>Configure Razorpay to accept online payments from members.</CardDescription>
+          <CardDescription>Configure Razorpay to accept online payments from members. Saved credentials are never returned to the browser; enter new values only when replacing them.</CardDescription>
         </CardHeader>
         <CardContent>
           <Form {...form}>

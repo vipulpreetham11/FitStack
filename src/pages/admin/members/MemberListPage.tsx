@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import { Search, Plus, UserCircle, MoreHorizontal, FileDown } from 'lucide-react'
 import { useMembers, type MemberListItem, type MemberRole } from '@/hooks/useMembers'
 import { useGym } from '@/hooks/useGym'
@@ -15,6 +15,7 @@ import { toast } from 'sonner'
 import { CreateMembershipModal } from '@/components/memberships/MembershipActions'
 
 export default function MemberListPage() {
+  const navigate = useNavigate()
   const { hasPermission } = useGym()
   const { members, loading, fetchMembers, recordManualAttendance } = useMembers()
   
@@ -31,7 +32,7 @@ export default function MemberListPage() {
   const handleQuickAttendance = async (member: MemberListItem) => {
     try {
       await recordManualAttendance(member.id)
-      toast.success(`Recorded attendance for ${member.profile.full_name}`)
+      toast.success(`Recorded attendance for ${member.profiles.full_name}`)
     } catch (error: any) {
       toast.error(error.message || 'Failed to record attendance')
     }
@@ -43,8 +44,9 @@ export default function MemberListPage() {
     if (search) {
       const q = search.toLowerCase()
       result = result.filter(m => 
-        m.profile.full_name.toLowerCase().includes(q) ||
-        (m.profile.phone && m.profile.phone.includes(q)) ||
+        m.profiles.full_name.toLowerCase().includes(q) ||
+        (m.profiles.email && m.profiles.email.toLowerCase().includes(q)) ||
+        (m.profiles.phone && m.profiles.phone.includes(q)) ||
         (m.member_code && m.member_code.toLowerCase().includes(q))
       )
     }
@@ -64,8 +66,8 @@ export default function MemberListPage() {
     }
 
     result.sort((a, b) => {
-      if (sortBy === 'name_asc') return a.profile.full_name.localeCompare(b.profile.full_name)
-      if (sortBy === 'name_desc') return b.profile.full_name.localeCompare(a.profile.full_name)
+      if (sortBy === 'name_asc') return a.profiles.full_name.localeCompare(b.profiles.full_name)
+      if (sortBy === 'name_desc') return b.profiles.full_name.localeCompare(a.profiles.full_name)
       if (sortBy === 'joined_desc') return new Date(b.joined_at).getTime() - new Date(a.joined_at).getTime()
       if (sortBy === 'expiry_asc') {
         const d1 = a.active_membership?.end_date ? new Date(a.active_membership.end_date).getTime() : Infinity
@@ -162,19 +164,19 @@ export default function MemberListPage() {
         <CardContent className="p-0">
           {loading ? (
             <div className="p-8 text-center text-muted-foreground">Loading members...</div>
-          ) : filteredMembers.length === 0 ? (
+          ) : members.length === 0 || filteredMembers.length === 0 ? (
             <>
               <div className="hidden overflow-x-auto md:block">
                 <Table>
                   <TableHeader><TableRow><TableHead>Member</TableHead><TableHead>Contact</TableHead><TableHead>Status</TableHead><TableHead>Membership</TableHead><TableHead>Joined</TableHead><TableHead className="w-[80px]" /></TableRow></TableHeader>
-                  <TableBody><TableRow><TableCell colSpan={6} className="py-12 text-center text-muted-foreground">{search || roleFilter !== 'all' || statusFilter !== 'all' ? 'No members match these filters.' : 'No members yet.'}</TableCell></TableRow></TableBody>
+                  <TableBody><TableRow><TableCell colSpan={6} className="py-12 text-center text-muted-foreground">{members.length === 0 ? 'No members yet.' : 'No members match these filters.'}</TableCell></TableRow></TableBody>
                 </Table>
               </div>
               <div className="p-12 text-center flex flex-col items-center md:hidden">
                 <UserCircle className="w-12 h-12 text-muted-foreground mb-4 opacity-20" />
-                <h3 className="text-lg font-medium">No members found</h3>
+                <h3 className="text-lg font-medium">{members.length === 0 ? 'No members found' : 'No matching members'}</h3>
                 <p className="text-muted-foreground max-w-sm mt-2 mb-4">
-                  {search || roleFilter !== 'all' || statusFilter !== 'all' 
+                  {members.length > 0
                     ? "Try adjusting your search or filters to find what you're looking for."
                     : "You haven't added any members yet. Get started by adding your first member."}
                 </p>
@@ -200,26 +202,26 @@ export default function MemberListPage() {
                   </TableHeader>
                   <TableBody>
                     {filteredMembers.map((member) => (
-                      <TableRow key={member.id} className="cursor-pointer group" onClick={() => window.location.href = `/admin/members/${member.id}`}>
+                      <TableRow key={member.id} className="cursor-pointer group" onClick={() => navigate(`/admin/members/${member.id}`)}>
                         <TableCell>
                           <div className="flex items-center gap-3">
                             <div className="w-9 h-9 rounded-full bg-muted flex items-center justify-center shrink-0 overflow-hidden">
-                              {member.profile.avatar_url ? (
-                                <img src={member.profile.avatar_url} alt={member.profile.full_name} className="w-full h-full object-cover" />
+                              {member.profiles.avatar_url ? (
+                                <img src={member.profiles.avatar_url} alt={member.profiles.full_name} className="w-full h-full object-cover" />
                               ) : (
                                 <UserCircle className="w-6 h-6 text-muted-foreground opacity-50" />
                               )}
                             </div>
                             <div>
                               <div className="font-medium text-foreground flex items-center">
-                                {member.profile.full_name}
+                                {member.profiles.full_name}
                                 {getRoleBadge(member.role)}
                               </div>
                               <div className="text-xs text-muted-foreground mt-0.5">{member.member_code || 'No Code'}</div>
                             </div>
                           </div>
                         </TableCell>
-                        <TableCell className="text-muted-foreground">{member.profile.phone || '-'}</TableCell>
+                        <TableCell className="text-muted-foreground">{member.profiles.phone || member.profiles.email || '-'}</TableCell>
                         <TableCell>{getStatusBadge(member)}</TableCell>
                         <TableCell>
                           {member.active_membership ? (
@@ -257,18 +259,18 @@ export default function MemberListPage() {
                   <div key={member.id} className="p-4 flex items-start justify-between">
                     <Link to={`/admin/members/${member.id}`} className="flex-1 flex gap-3">
                       <div className="w-10 h-10 rounded-full bg-muted flex items-center justify-center shrink-0 overflow-hidden">
-                        {member.profile.avatar_url ? (
-                          <img src={member.profile.avatar_url} alt={member.profile.full_name} className="w-full h-full object-cover" />
+                      {member.profiles.avatar_url ? (
+                        <img src={member.profiles.avatar_url} alt={member.profiles.full_name} className="w-full h-full object-cover" />
                         ) : (
                           <UserCircle className="w-6 h-6 text-muted-foreground opacity-50" />
                         )}
                       </div>
                       <div className="space-y-1">
                         <div className="font-medium leading-none flex items-center flex-wrap gap-1">
-                          {member.profile.full_name}
+                          {member.profiles.full_name}
                           {getRoleBadge(member.role)}
                         </div>
-                        <div className="text-xs text-muted-foreground">{member.profile.phone}</div>
+                        <div className="text-xs text-muted-foreground">{member.profiles.phone || member.profiles.email || '-'}</div>
                         <div className="flex gap-2 items-center mt-2">
                           {getStatusBadge(member)}
                           {member.active_membership && (
@@ -302,7 +304,7 @@ export default function MemberListPage() {
         <CreateMembershipModal
           open
           onOpenChange={open => { if (!open) setMembershipMember(null) }}
-          member={{ id: membershipMember.id, name: membershipMember.profile.full_name, phone: membershipMember.profile.phone }}
+          member={{ id: membershipMember.id, name: membershipMember.profiles.full_name, phone: membershipMember.profiles.phone }}
           onSuccess={fetchMembers}
         />
       )}

@@ -17,6 +17,15 @@ export default function Header({ member = false }: { member?: boolean }) {
   const safeLogo = gym?.logo_url && /^https:\/\//i.test(gym.logo_url) ? gym.logo_url : null
   const initials = (profile?.full_name ?? 'U').split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase()
 
+  const handleSignOut = async () => {
+    try {
+      await signOut()
+      window.location.href = '/login'
+    } catch {
+      toast.error('Sign out failed. Please retry.')
+    }
+  }
+
   return <header className="sticky top-0 z-20 flex h-14 items-center justify-between gap-4 border-b bg-background px-5 sm:px-8">
     <div className="flex items-center gap-3">
       {/* Hamburger — admin mobile only */}
@@ -68,7 +77,7 @@ export default function Header({ member = false }: { member?: boolean }) {
             <p className="text-xs text-muted-foreground">{profile?.email ?? gym?.role ?? ''}</p>
           </div>
           <DropdownMenuSeparator />
-          <DropdownMenuItem onSelect={() => void signOut().catch(() => toast.error('Sign out failed. Please retry.'))}>
+          <DropdownMenuItem onClick={() => void handleSignOut()}>
             <LogOut size={16} />{previewRole ? 'Exit preview' : 'Sign out'}
           </DropdownMenuItem>
         </DropdownMenuContent>

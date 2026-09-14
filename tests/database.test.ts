@@ -4,8 +4,8 @@ import { PGlite } from '@electric-sql/pglite'
 import { readFileSync } from 'node:fs'
 const db = new PGlite()
 const id = (n:number) => '00000000-0000-4000-8000-'+n.toString().padStart(12,'0')
-const gym=id(1), otherGym=id(2), owner=id(3), user=id(4), otherUser=id(5), rec=id(6), superUser=id(7)
-const member=id(14), member2=id(15), ownerMember=id(13), recMember=id(16), otherMember=id(17), plan=id(20)
+const gym=id(1), otherGym=id(2), owner=id(3), user=id(4), otherUser=id(5), rec=id(6), superUser=id(7), devUser=id(8)
+const member=id(14), member2=id(15), ownerMember=id(13), recMember=id(16), otherMember=id(17), devMember=id(18), plan=id(20)
 async function scalar(sql:string) { return Object.values((await db.query(sql)).rows[0] as object)[0] }
 async function asUser(uid:string, sql:string) {
  await db.exec("SET ROLE authenticated; SELECT set_config('request.jwt.claim.sub','"+uid+"',false);")
@@ -25,17 +25,23 @@ beforeAll(async()=>{
  `)
  const sql=readFileSync(new URL('../supabase/fitstack-v1.sql',import.meta.url),'utf8')
  await db.exec(sql.replace('CREATE EXTENSION IF NOT EXISTS pgcrypto WITH SCHEMA extensions;','-- pgcrypto stubbed in embedded test only'))
+ const devPaymentSql=readFileSync(new URL('../supabase/fitstack-dev-payment-simulation.sql',import.meta.url),'utf8')
+ await db.exec(devPaymentSql)
+ const ownPaymentsPolicySql=readFileSync(new URL('../supabase/migrations/20260913171840_members_read_own_payments.sql',import.meta.url),'utf8')
+ await db.exec(ownPaymentsPolicySql)
+ const consolidatedPaymentsPolicySql=readFileSync(new URL('../supabase/migrations/20260913172040_consolidate_payments_select_policy.sql',import.meta.url),'utf8')
+ await db.exec(consolidatedPaymentsPolicySql)
  await db.exec(`
- INSERT INTO auth.users(id) VALUES ('${owner}'),('${user}'),('${otherUser}'),('${rec}'),('${superUser}');
+ INSERT INTO auth.users(id) VALUES ('${owner}'),('${user}'),('${otherUser}'),('${rec}'),('${superUser}'),('${devUser}');
  INSERT INTO public.profiles(id,full_name,phone,is_super_admin) VALUES
  ('${owner}','Owner','+919876543210',false),('${user}','Alice','+919876543211',false),
  ('${otherUser}','Bob','+919876543212',false),('${rec}','Reception','+919876543213',false),
- ('${superUser}','Platform','+919876543214',true);
+ ('${superUser}','Platform','+919876543214',true),('${devUser}','Dev Member','+919876543215',false);
  INSERT INTO public.gyms(id,name,slug,gstin) VALUES ('${gym}','Gym A','gym-a','TESTGST'),('${otherGym}','Gym B','gym-b',null);
  INSERT INTO public.gym_members(id,gym_id,profile_id,role) VALUES
  ('${ownerMember}','${gym}','${owner}','owner'),('${member}','${gym}','${user}','member'),
  ('${member2}','${gym}','${otherUser}','member'),('${recMember}','${gym}','${rec}','receptionist'),
- ('${otherMember}','${otherGym}','${otherUser}','member');
+ ('${otherMember}','${otherGym}','${otherUser}','member'),('${devMember}','${gym}','${devUser}','member');
  INSERT INTO public.membership_plans(id,gym_id,name,price,duration_type,duration_value) VALUES ('${plan}','${gym}','Monthly',100,'months',1);
  `)
 },30000)
@@ -49,7 +55,7 @@ describe('V1 SQL',()=>{
  const own=await asUser(user,'SELECT id FROM public.gym_members')
  expect(own.rows.map(r=>(r as {id:string}).id)).toEqual([member])
  const directory=await asUser(rec,`SELECT * FROM public.get_member_directory('${gym}')`)
- expect(directory.rows).toHaveLength(4)
+ expect(directory.rows).toHaveLength(5)
  await expect(asUser(user,`SELECT * FROM public.get_member_directory('${gym}')`)).rejects.toThrow()
  await expect(asUser(rec,`SELECT * FROM public.get_member_directory('${otherGym}')`)).rejects.toThrow()
  })
@@ -69,6 +75,14 @@ describe('V1 SQL',()=>{
  })
  it('enforces same-tenant foreign keys even for server writes',async()=>{
  await expect(db.exec(`INSERT INTO public.payments(gym_id,member_id,plan_id,requested_start_date,amount,discount_amount,taxable_amount,cgst_amount,sgst_amount,total_amount) VALUES('${gym}','${otherMember}','${plan}',CURRENT_DATE,100,0,100,2.5,2.5,105)`)).rejects.toThrow()
+ })
+ it('allows active members to read only their own payments',async()=>{
+ await db.exec(`INSERT INTO public.payments(id,gym_id,member_id,plan_id,requested_start_date,amount,taxable_amount,cgst_amount,sgst_amount,total_amount,status)
+ VALUES('${id(40)}','${gym}','${member}','${plan}',CURRENT_DATE,5000,5000,125,125,5250,'captured'),
+ ('${id(41)}','${gym}','${member2}','${plan}',CURRENT_DATE,1000,1000,25,25,1050,'captured')`)
+ expect(await scalar("SELECT count(*)::int FROM pg_policies WHERE schemaname='public' AND tablename='payments' AND policyname='members_read_own_payments'")).toBe(1)
+ expect((await asUser(user,'SELECT id,total_amount,status FROM public.payments ORDER BY id')).rows).toEqual([{id:id(40),total_amount:'5250.00',status:'captured'}])
+ expect((await asUser(otherUser,'SELECT id,total_amount,status FROM public.payments ORDER BY id')).rows).toEqual([{id:id(41),total_amount:'1050.00',status:'captured'}])
  })
  it('calculates inclusive durations',async()=>{
  expect(await scalar("SELECT public.calculate_membership_end_date('2026-01-15','months',1)::text")).toBe('2026-02-14')
@@ -95,6 +109,19 @@ describe('V1 SQL',()=>{
  expect(await scalar(`SELECT processed FROM public.razorpay_webhook_events WHERE event_id='${event}'`)).toBe(true)
  expect((await asUser(otherUser,'SELECT id FROM public.invoices')).rows).toHaveLength(0)
  await expect(db.exec(`UPDATE public.invoices SET total_amount=0 WHERE payment_id='${pay}'`)).rejects.toThrow()
+ })
+ it('simulates a development checkout through one authorized transaction',async()=>{
+  const preview=await asUser(devUser,`SELECT public.simulate_payment_checkout('${gym}','${devMember}','${plan}',CURRENT_DATE,NULL,true) AS result`)
+  expect((preview.rows[0] as {result:{simulated:boolean;captured:boolean}}).result).toMatchObject({simulated:true,captured:false})
+  expect(await scalar(`SELECT count(*)::int FROM public.payments WHERE member_id='${devMember}'`)).toBe(0)
+  await expect(asUser(devUser,`SELECT public.simulate_payment_checkout('${gym}','${member}','${plan}',CURRENT_DATE,NULL,false)`)).rejects.toThrow(/only purchase a membership for yourself/i)
+  const checkout=await asUser(devUser,`SELECT public.simulate_payment_checkout('${gym}','${devMember}','${plan}',CURRENT_DATE,NULL,false) AS result`)
+  const result=(checkout.rows[0] as {result:{simulated:boolean;captured:boolean;paymentId:string;invoiceId:string;membershipId:string;orderId:string}}).result
+  expect(result).toMatchObject({simulated:true,captured:true})
+  expect(result.orderId).toMatch(/^dev_order_/)
+  expect(await scalar(`SELECT status FROM public.payments WHERE id='${result.paymentId}'`)).toBe('captured')
+  expect(await scalar(`SELECT count(*)::int FROM public.memberships WHERE id='${result.membershipId}' AND payment_id='${result.paymentId}'`)).toBe(1)
+  expect(await scalar(`SELECT count(*)::int FROM public.invoices WHERE id='${result.invoiceId}' AND payment_id='${result.paymentId}'`)).toBe(1)
  })
  it('enforces one current and one renewal; rolls back all capture side effects on conflict',async()=>{
  const current=await scalar(`SELECT id FROM public.memberships WHERE member_id='${member}' AND status='active'`)

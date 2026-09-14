@@ -125,7 +125,7 @@ export default function CreateMemberPage() {
           is_active: true,
           qr_secret: Array.from({length: 32}, () => Math.floor(Math.random()*36).toString(36)).join(''),
         })
-        .select()
+        .select('id')
         .single()
 
       if (memberError) throw new Error(`Failed to add member to gym: ${memberError.message}`)

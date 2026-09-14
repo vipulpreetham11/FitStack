@@ -25,6 +25,10 @@ The script is intended for an empty application schema. If installation fails, t
 
 The SQL has been tested in an embedded PostgreSQL engine (PGlite) with stand-ins for Supabase's auth.users, auth.uid(), and pgcrypto. Supabase project settings, the actual pgcrypto extension, SMS, Edge Functions, Razorpay, and hosted PostgREST remain to be verified in their implementation modules. The SQL has NOT been applied to your hosted Supabase account.
 
+### Development payment simulation
+
+Vite development servers bypass `create-razorpay-order` and call the transactional `simulate_payment_checkout` database RPC. For an existing **development-only** database, apply `supabase/fitstack-dev-payment-simulation.sql` before testing checkout. Production builds continue to use Razorpay unless `VITE_DEV_MODE=true` is explicitly set. Do not apply the development RPC to a production database; it is intentionally restricted to signed-in gym users and refuses simulated captures once Razorpay credentials are configured.
+
 ## Security and integration contract
 
 - Select explicit safe columns from `gyms`, `gym_members`, `payments`, and `scan_events`. Wildcard selects intentionally fail: QR secrets, encrypted gateway keys, signatures, and raw scans are not browser-readable.

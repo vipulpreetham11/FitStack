@@ -212,7 +212,7 @@ export default function MemberProfilePage() {
                     <Activity className="w-4 h-4 mr-2" /> Quick Scan
                   </Button>
                 )}
-                <Button size="sm" render={
+                <Button nativeButton={false} size="sm" render={
                   <Link to={`https://wa.me/${profile.phone?.replace('+', '')}`} target="_blank" rel="noopener noreferrer">
                     Contact
                   </Link>

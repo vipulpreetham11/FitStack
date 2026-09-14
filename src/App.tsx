@@ -37,6 +37,7 @@ const Page22 = lazy(() => import('@/pages/admin/settings/BusinessHoursPage'))
 const Page23 = lazy(() => import('@/pages/admin/settings/HolidaysPage'))
 const Page24 = lazy(() => import('@/pages/admin/settings/PaymentSettingsPage'))
 const Page25 = lazy(() => import('@/pages/admin/settings/InvoiceSettingsPage'))
+const TeamPage = lazy(() => import('@/components/team/TeamPage'))
 const Page26 = lazy(() => import('@/pages/member/MemberDashboard'))
 const Page27 = lazy(() => import('@/pages/member/MemberProfilePage'))
 const Page28 = lazy(() => import('@/pages/member/MemberMembershipPage'))
@@ -86,6 +87,7 @@ export default function App() {
 <Route element={<RouteGuard roles={ADMIN_ROLES} permission="settings.manage"/>}><Route element={<AdminLayout/>}><Route path="/admin/settings" element={<Page21/>} /></Route></Route>
 <Route element={<RouteGuard roles={ADMIN_ROLES} permission="settings.manage"/>}><Route element={<AdminLayout/>}><Route path="/admin/settings/hours" element={<Page22/>} /></Route></Route>
 <Route element={<RouteGuard roles={ADMIN_ROLES} permission="holidays.manage"/>}><Route element={<AdminLayout/>}><Route path="/admin/settings/holidays" element={<Page23/>} /></Route></Route>
+<Route element={<RouteGuard roles={['owner','admin']} permission="staff.manage"/>}><Route element={<AdminLayout/>}><Route path="/admin/settings/team" element={<TeamPage/>} /></Route></Route>
 <Route element={<RouteGuard roles={ADMIN_ROLES} permission="credentials.manage"/>}><Route element={<AdminLayout/>}><Route path="/admin/settings/payments" element={<Page24/>} /></Route></Route>
 <Route element={<RouteGuard roles={ADMIN_ROLES} permission="settings.manage"/>}><Route element={<AdminLayout/>}><Route path="/admin/settings/invoices" element={<Page25/>} /></Route></Route>
 <Route element={<RouteGuard/>}><Route element={<MemberLayout/>}><Route path="/member" element={<Page26/>} /></Route></Route>

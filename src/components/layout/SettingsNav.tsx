@@ -9,6 +9,7 @@ export default function SettingsNav() {
     { name: 'Profile', href: '/admin/settings' },
     { name: 'Business Hours', href: '/admin/settings/hours' },
     { name: 'Holidays', href: '/admin/settings/holidays' },
+    { name: 'Team', href: '/admin/settings/team' },
     { name: 'Payments', href: '/admin/settings/payments' },
     { name: 'Invoices', href: '/admin/settings/invoices' },
   ]

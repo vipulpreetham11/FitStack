@@ -9,6 +9,8 @@ import { Badge } from '@/components/ui/badge'
 import { useDashboard } from '@/hooks/useDashboard'
 import { formatCurrency, formatDate } from '@/lib/format'
 import { useGym } from '@/hooks/useGym'
+import { usePlans } from '@/hooks/usePlans'
+import { useMembers } from '@/hooks/useMembers'
 
 function MetricCard({ label, value, icon: Icon, accent, loading, warning }: { label: string; value: number | string; icon: React.ElementType; accent?: string; loading: boolean; warning?: boolean }) {
   return (
@@ -36,6 +38,8 @@ function shortDate(dateStr: string) {
 
 export default function DashboardPage() {
   const { gym } = useGym()
+  const { plans } = usePlans()
+  const { members } = useMembers()
   const {
     liveHeadcount, activeMembers, expiringSoon, revenueThisMonth,
     revenueByDay, attendanceByDay, recentActivity,
@@ -44,6 +48,7 @@ export default function DashboardPage() {
   } = useDashboard()
 
   const brandColor = gym?.brand_color ?? '#171717'
+  const showGettingStarted = plans.length === 0 || members.length <= 1
 
   return (
     <div className="space-y-8 pb-10">
@@ -53,6 +58,7 @@ export default function DashboardPage() {
       </div>
 
       {error && <div role="alert" className="rounded-lg border border-destructive/30 p-3 text-destructive text-sm">{error}</div>}
+      {showGettingStarted && <Card><CardHeader><CardTitle>Getting Started</CardTitle></CardHeader><CardContent className="grid gap-3 sm:grid-cols-2">{[['Set up gym profile', '/admin/settings/profile', !!gym?.name], ['Create your first plan', '/admin/plans/new', plans.length > 0], ['Add your first member', '/admin/members/new', members.length > 1], ['Configure payments', '/admin/settings/payments', false]].map(([label, href, done]) => <Link key={href as string} to={href as string} className="flex items-center gap-3 rounded-lg border p-3 hover:bg-muted/50"><span aria-hidden="true">{done ? '✅' : '⬜'}</span><span className={done ? 'text-muted-foreground line-through' : 'font-medium'}>{label}</span></Link>)}</CardContent></Card>}
 
       {/* Row 1 — Key metrics */}
       <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">

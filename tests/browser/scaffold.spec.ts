@@ -126,6 +126,11 @@ const routes = [
     "url": "/admin/settings/holidays"
   },
   {
+    "path": "admin/settings/TeamPage",
+    "title": "Team",
+    "url": "/admin/settings/team"
+  },
+  {
     "path": "admin/settings/PaymentSettingsPage",
     "title": "Payment settings",
     "url": "/admin/settings/payments"
@@ -213,7 +218,6 @@ test('all routes, guards, mobile navigation and themes',async({page})=>{
  await page.screenshot({path:'test-results/admin-mobile.png',fullPage:true,animations:'disabled'})
  await page.getByRole('button',{name:'Account menu'}).click()
  await page.getByRole('menuitem',{name:'Exit preview'}).click()
- await page.reload()
  await expect(page).toHaveURL(/\/login$/)
  await page.locator('summary').click()
  await page.getByRole('button',{name:'member',exact:true}).click()
@@ -226,7 +230,6 @@ test('all routes, guards, mobile navigation and themes',async({page})=>{
  await expect(page).toHaveURL(/\/member$/)
  await page.getByRole('button',{name:'Account menu'}).click()
  await page.getByRole('menuitem',{name:'Exit preview'}).click()
- await page.reload()
  await expect(page).toHaveURL(/\/login$/)
  await page.locator('summary').click()
  await page.getByRole('button',{name:'super admin',exact:true}).click()
@@ -244,6 +247,14 @@ test('all routes, guards, mobile navigation and themes',async({page})=>{
 test('final reports, super admin and PWA surfaces', async ({ page }) => {
  test.setTimeout(60000)
  const errors:string[]=[]; page.on('pageerror', error => errors.push(error.message))
+ await page.route('**/rest/v1/rpc/get_super_admin_gyms', route => route.fulfill({
+  contentType:'application/json',
+  body:JSON.stringify([{id:'00000000-0000-4000-8000-000000000001',name:'FitStack Studio',slug:'preview',city:'Hyderabad',is_active:true,members_count:3,active_memberships:1,revenue_this_month:0,created_at:'2026-01-01T00:00:00Z'}]),
+ }))
+ await page.route('**/rest/v1/rpc/get_super_admin_gym_detail', route => route.fulfill({
+  contentType:'application/json',
+  body:JSON.stringify({gym:{id:'00000000-0000-4000-8000-000000000001',name:'FitStack Studio',slug:'preview',logo_url:null,brand_color:'#171717',address:null,city:'Hyderabad',state:'Telangana',pincode:null,phone:null,email:null,website:null,gstin:null,is_active:true,razorpay_configured:false,created_at:'2026-01-01T00:00:00Z'},members:[],financials:{revenue_this_month:0,captured_payments:0,failed_payments:0,pending_payments:0},recent_payments:[]}),
+ }))
  await page.setViewportSize({ width:375, height:812 })
  await page.goto('/admin/reports/revenue')
  await page.locator('summary').click(); await page.getByRole('button',{name:'owner',exact:true}).click()
@@ -254,9 +265,172 @@ test('final reports, super admin and PWA surfaces', async ({ page }) => {
  await page.reload(); await page.locator('summary').click(); await page.getByRole('button',{name:'super admin',exact:true}).click()
  await page.goto('/super-admin'); await page.locator('summary').click(); await page.getByRole('button',{name:'super admin',exact:true}).click()
  await expect(page.getByText('Platform administration')).toBeVisible(); await expect(page.getByText('FitStack Studio',{exact:true})).toBeVisible()
- await page.getByRole('button',{name:'View'}).click(); await expect(page.getByRole('tab',{name:'Overview'})).toBeVisible(); await expect(page.getByRole('tab',{name:'Members'})).toBeVisible(); await expect(page.getByRole('tab',{name:'Financials'})).toBeVisible()
+ await page.getByRole('button',{name:'View'}).click(); await expect(page.getByRole('tab',{name:'Overview'})).toBeVisible(); await expect(page.getByRole('tab',{name:'Members'})).toBeVisible(); await expect(page.getByRole('tab',{name:'Team'})).toBeVisible(); await expect(page.getByRole('tab',{name:'Financials'})).toBeVisible(); await page.getByRole('tab',{name:'Team'}).click(); await expect(page.getByRole('heading',{name:'Team'})).toBeVisible()
  await page.getByRole('button',{name:'New gym'}).click(); await expect(page.getByRole('heading',{name:'Onboard New Gym'})).toBeVisible()
  const manifest = await page.request.get('/manifest.json'); expect(manifest.ok()).toBe(true); expect((await manifest.json()).display).toBe('standalone')
  await page.goto('/not-a-real-page'); await expect(page.getByRole('heading',{name:'This page took a rest day'})).toBeVisible()
  expect(errors).toEqual([])
+})
+
+test('members remain visible when membership enrichment fails', async ({ page }) => {
+ const member={
+   id:'00000000-0000-4000-8000-000000000099',
+   profile_id:'00000000-0000-4000-8000-000000000098',
+   member_code:null,
+   role:'member',
+   is_active:true,
+   joined_at:'2026-09-13T10:00:00Z',
+   profiles:{id:'00000000-0000-4000-8000-000000000098',full_name:'padmanabha simha Pilli',email:null,phone:null,avatar_url:null},
+  }
+ await page.route('**/rest/v1/gym_members*', route => {
+  const requestUrl=new URL(route.request().url())
+  const select=requestUrl.searchParams.get('select') ?? ''
+  expect(select).not.toContain('*')
+  expect(select).not.toContain('qr_secret')
+  expect(select).not.toContain('metadata')
+  const isProfileRequest=requestUrl.searchParams.has('id')
+  if(isProfileRequest){
+   expect(select).toContain('memberships!memberships_member_id_fkey')
+   expect(select).toContain('membership_plans!memberships_plan_id_fkey')
+   expect(select).toContain('payments!payments_member_id_fkey')
+   expect(select).toContain('invoices!invoices_payment_id_fkey')
+   expect(select).toContain('attendance!attendance_member_id_fkey')
+  }
+  return route.fulfill({
+   contentType:'application/json',
+   body:JSON.stringify(isProfileRequest?{
+    ...member,
+    gym_id:'preview',
+    created_at:'2026-09-13T10:00:00Z',
+    updated_at:'2026-09-13T10:00:00Z',
+    profiles:{...member.profiles,date_of_birth:null,gender:null,address:null,emergency_contact_name:null,emergency_contact_phone:null},
+    memberships:[],payments:[],attendance:[],
+   }:[member]),
+  })
+ })
+ await page.route('**/rest/v1/memberships*', route => route.fulfill({
+  status:403,
+  contentType:'application/json',
+  body:JSON.stringify({code:'42501',message:'permission denied for table memberships'}),
+ }))
+
+ await page.goto('/login')
+ await page.locator('summary').click()
+ await page.getByRole('button',{name:'owner',exact:true}).click()
+ await page.evaluate(()=>{history.pushState({},'','/admin/members');window.dispatchEvent(new PopStateEvent('popstate'))})
+
+ await expect(page.getByText('padmanabha simha Pilli',{exact:true}).first()).toBeVisible()
+ await expect(page.getByText('No Plan',{exact:true}).first()).toBeVisible()
+ await page.getByText('padmanabha simha Pilli',{exact:true}).first().click()
+ await expect(page).toHaveURL(/\/admin\/members\/00000000-0000-4000-8000-000000000099$/)
+ await expect(page.getByRole('heading',{name:'padmanabha simha Pilli'})).toBeVisible()
+ await expect(page.getByText('Member not found')).toHaveCount(0)
+})
+
+test('member payment history requests only the current gym-member payments', async ({ page }) => {
+ let paymentRequests=0
+ await page.route('**/rest/v1/payments*', route => {
+  paymentRequests++
+  const requestUrl=new URL(route.request().url())
+  const select=requestUrl.searchParams.get('select') ?? ''
+  expect(select).not.toContain('*')
+  expect(select).not.toContain('razorpay_signature')
+  expect(select).not.toContain('metadata')
+  expect(requestUrl.searchParams.get('gym_id')).toBe('eq.preview')
+  expect(requestUrl.searchParams.get('member_id')).toBe('eq.preview')
+  return route.fulfill({contentType:'application/json',body:JSON.stringify([{
+   id:'00000000-0000-4000-8000-000000000140',gym_id:'preview',member_id:'preview',plan_id:'00000000-0000-4000-8000-000000000120',
+   requested_start_date:'2026-09-13',amount:5000,discount_amount:0,taxable_amount:5000,gst_rate:5,cgst_amount:125,sgst_amount:125,
+   total_amount:5250,currency:'INR',razorpay_order_id:'dev_order_member_payment',razorpay_payment_id:'dev_payment_member_payment',status:'captured',
+   promo_code_id:null,description:'Premium membership',created_by:null,created_at:'2026-09-13T15:43:58Z',updated_at:'2026-09-13T15:43:58Z',
+   member:{id:'preview',profiles:{full_name:'padmanabha simha Pilli',phone:null,email:null}},invoice:{id:'00000000-0000-4000-8000-000000000141',invoice_number:'AFT-2026-0001'},
+  }])})
+ })
+
+ await page.goto('/login')
+ await page.locator('summary').click()
+ await page.getByRole('button',{name:'member',exact:true}).click()
+ await page.evaluate(()=>{history.pushState({},'','/member/payments');window.dispatchEvent(new PopStateEvent('popstate'))})
+ await expect(page.getByRole('heading',{name:'Your payments'})).toBeVisible()
+ await expect(page.getByText('Premium membership')).toBeVisible()
+ await expect(page.getByText(/5,250/)).toBeVisible()
+ await expect(page.getByText(/permission denied/i)).toHaveCount(0)
+ expect(paymentRequests).toBeGreaterThan(0)
+})
+
+test('development checkout bypasses the Edge Function and completes the membership sale', async ({ page }) => {
+ const plan={
+  id:'00000000-0000-4000-8000-000000000120',gym_id:'preview',name:'Monthly',description:null,
+  price:1000,duration_type:'months',duration_value:1,features:[],max_freezes:0,max_freeze_days:null,
+  allow_future_start:true,is_active:true,sort_order:0,created_by:null,created_at:'2026-09-13T10:00:00Z',updated_at:'2026-09-13T10:00:00Z',
+ }
+ let edgeCalls=0
+ const rpcCalls:{p_preview:boolean;p_member_id:string}[]=[]
+ await page.route('**/functions/v1/create-razorpay-order', route => { edgeCalls++; return route.abort() })
+ await page.route('**/rest/v1/membership_plans*', route => route.fulfill({contentType:'application/json',body:JSON.stringify([plan])}))
+ await page.route('**/rest/v1/payments*', route => route.fulfill({contentType:'application/json',body:'[]'}))
+ await page.route('**/rest/v1/rpc/simulate_payment_checkout', async route => {
+  const body=route.request().postDataJSON() as {p_preview:boolean;p_member_id:string}
+  rpcCalls.push(body)
+  const pricing={amount:1000,discountAmount:0,taxableAmount:1000,gstRate:0,cgstAmount:0,sgstAmount:0,totalAmount:1000,totalPaise:100000,promoCodeId:null,promoCode:null,currency:'INR',simulated:true}
+  return route.fulfill({contentType:'application/json',body:JSON.stringify(body.p_preview?{
+   ...pricing,orderId:null,paymentId:null,razorpayKeyId:null,captured:false,
+  }:{
+   ...pricing,orderId:'dev_order_browser',paymentId:'00000000-0000-4000-8000-000000000121',razorpayKeyId:null,captured:true,
+   membershipId:'00000000-0000-4000-8000-000000000122',invoiceId:'00000000-0000-4000-8000-000000000123',
+  })})
+ })
+
+ await page.goto('/login')
+ await page.locator('summary').click()
+ await page.getByRole('button',{name:'member',exact:true}).click()
+ await page.evaluate(()=>{history.pushState({},'','/member/plans');window.dispatchEvent(new PopStateEvent('popstate'))})
+ await expect(page.getByRole('heading',{name:'Explore plans'})).toBeVisible()
+ await page.getByRole('button',{name:'Buy Now'}).click()
+ await expect(page.getByText('Development mode',{exact:true})).toBeVisible()
+ await page.getByRole('button',{name:/^Pay /}).click()
+ await expect(page.getByRole('heading',{name:'Payment successful'})).toBeVisible()
+ await expect(page.getByText('The membership and invoice are ready.')).toBeVisible()
+ expect(rpcCalls.filter(call=>call.p_preview)).not.toHaveLength(0)
+ expect(rpcCalls.filter(call=>!call.p_preview)).toHaveLength(1)
+ expect(rpcCalls.at(-1)?.p_preview).toBe(false)
+ expect(rpcCalls.every(call=>call.p_member_id==='preview')).toBe(true)
+ expect(edgeCalls).toBe(0)
+})
+
+test('a lost checkout response reconciles an active membership instead of showing payment failure', async ({ page }) => {
+ const plan={
+  id:'00000000-0000-4000-8000-000000000130',gym_id:'preview',name:'Quarterly',description:null,
+  price:5000,duration_type:'months',duration_value:3,features:[],max_freezes:0,max_freeze_days:null,
+  allow_future_start:true,is_active:true,sort_order:0,created_by:null,created_at:'2026-09-13T10:00:00Z',updated_at:'2026-09-13T10:00:00Z',
+ }
+ let mutationCalls=0
+ await page.route('**/rest/v1/membership_plans*', route => route.fulfill({contentType:'application/json',body:JSON.stringify([plan])}))
+ await page.route('**/rest/v1/payments*', route => route.fulfill({contentType:'application/json',body:'[]'}))
+ await page.route('**/rest/v1/memberships*', route => route.fulfill({
+  contentType:'application/json',
+  body:JSON.stringify({id:'00000000-0000-4000-8000-000000000131',status:'active'}),
+ }))
+ await page.route('**/rest/v1/rpc/simulate_payment_checkout', async route => {
+  const body=route.request().postDataJSON() as {p_preview:boolean}
+  if(body.p_preview) return route.fulfill({contentType:'application/json',body:JSON.stringify({
+   amount:5000,discountAmount:0,taxableAmount:5000,gstRate:5,cgstAmount:125,sgstAmount:125,
+   totalAmount:5250,totalPaise:525000,promoCodeId:null,promoCode:null,currency:'INR',simulated:true,
+   orderId:null,paymentId:null,razorpayKeyId:null,captured:false,
+  })})
+  mutationCalls++
+  return route.fulfill({status:503,contentType:'application/json',body:JSON.stringify({message:'Checkout response was lost'})})
+ })
+
+ await page.goto('/login')
+ await page.locator('summary').click()
+ await page.getByRole('button',{name:'member',exact:true}).click()
+ await page.evaluate(()=>{history.pushState({},'','/member/plans');window.dispatchEvent(new PopStateEvent('popstate'))})
+ await page.getByRole('button',{name:'Buy Now'}).click()
+ await expect(page.getByText('Development mode',{exact:true})).toBeVisible()
+ await page.getByRole('button',{name:/^Pay /}).click()
+ await expect(page.getByRole('heading',{name:'Payment successful'})).toBeVisible()
+ await expect(page.getByText('Membership already active.')).toBeVisible()
+ await expect(page.getByRole('heading',{name:'Payment not completed'})).toHaveCount(0)
+ expect(mutationCalls).toBeGreaterThan(0)
 })

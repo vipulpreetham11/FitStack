@@ -51,7 +51,15 @@ export default function GymProfilePage() {
   useEffect(() => {
     async function loadGymProfile() {
       if (gym && supabase) {
-        const { data } = await supabase.from('gyms').select('*').eq('id', gym.gym_id).single()
+        const { data, error } = await supabase
+          .from('gyms')
+          .select('id, name, slug, logo_url, brand_color, brand_color_secondary, address, city, state, pincode, phone, email, website, gstin, business_hours, working_days, timezone, invoice_prefix, invoice_year, invoice_counter, gst_inclusive, is_active, settings, created_at, updated_at')
+          .eq('id', gym.gym_id)
+          .single()
+        if (error) {
+          toast.error(error.message || 'Failed to load gym profile')
+          return
+        }
         if (data) {
           form.reset({
             name: data.name,

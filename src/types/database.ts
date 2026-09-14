@@ -22,4 +22,5 @@ export type Database = { public: { Tables: {
  get_join_gym: { Args: { p_slug: string }; Returns: { id: string; name: string; slug: string; logo_url: string | null; brand_color: string | null }[] };
  get_my_gym_access: { Args: Record<string, never>; Returns: { id: string; gym_id: string; profile_id: string; role: string; member_code: string | null; member_is_active: boolean; joined_at: string; created_at: string; updated_at: string; name: string; slug: string; logo_url: string | null; brand_color: string | null; is_active: boolean }[] };
  join_gym: { Args: { p_slug: string }; Returns: string };
+ simulate_payment_checkout: { Args: { p_gym_id: string; p_member_id: string; p_plan_id: string; p_start_date: string; p_promo_code?: string | null; p_preview?: boolean }; Returns: Json };
 }; Enums: { [_ in never]: never }; CompositeTypes: { [_ in never]: never } } }
