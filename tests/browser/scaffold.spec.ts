@@ -358,6 +358,38 @@ test('member payment history requests only the current gym-member payments', asy
  expect(paymentRequests).toBeGreaterThan(0)
 })
 
+test('payment settings save credentials through the authorized RPC', async ({ page }) => {
+ let directGymWrites=0
+ const rpcCalls:{p_gym_id:string;p_key_id:string;p_key_secret:string;p_webhook_secret:string}[]=[]
+ await page.route('**/rest/v1/gyms*', route => {
+  if(route.request().method()==='PATCH') directGymWrites++
+  return route.fulfill({contentType:'application/json',body:'[]'})
+ })
+ await page.route('**/rest/v1/rpc/save_razorpay_credentials', async route => {
+  rpcCalls.push(route.request().postDataJSON())
+  return route.fulfill({contentType:'application/json',body:JSON.stringify({saved:true})})
+ })
+
+ await page.goto('/login')
+ await page.locator('summary').click()
+ await page.getByRole('button',{name:'owner',exact:true}).click()
+ await page.evaluate(()=>{history.pushState({},'','/admin/settings/payments');window.dispatchEvent(new PopStateEvent('popstate'))})
+ await expect(page.getByRole('heading',{name:'Settings'})).toBeVisible()
+ await page.getByLabel('Razorpay Key ID').fill('rzp_test_fitstack')
+ await page.getByLabel('Razorpay Key Secret').fill('test_key_secret')
+ await page.getByLabel('Razorpay Webhook Secret').fill('test_webhook_secret')
+ await page.getByRole('button',{name:'Save Credentials'}).click()
+
+ await expect(page.getByText('Payment credentials updated successfully')).toBeVisible()
+ expect(rpcCalls).toEqual([{
+  p_gym_id:'preview',
+  p_key_id:'rzp_test_fitstack',
+  p_key_secret:'test_key_secret',
+  p_webhook_secret:'test_webhook_secret',
+ }])
+ expect(directGymWrites).toBe(0)
+})
+
 test('development checkout bypasses the Edge Function and completes the membership sale', async ({ page }) => {
  const plan={
   id:'00000000-0000-4000-8000-000000000120',gym_id:'preview',name:'Monthly',description:null,

@@ -39,17 +39,13 @@ export default function PaymentSettingsPage() {
     if (!gym || !supabase || !canEdit) return
     setIsSaving(true)
 
-    // TODO: Production will encrypt these credentials via Edge Function before storing
-    // For now, storing as-is to satisfy UI flow
     try {
-      const { error } = await supabase
-        .from('gyms')
-        .update({
-          razorpay_key_id_enc: data.razorpay_key_id || null,
-          razorpay_key_secret_enc: data.razorpay_key_secret || null,
-          razorpay_webhook_secret_enc: data.razorpay_webhook_secret || null,
-        })
-        .eq('id', gym.gym_id)
+      const { error } = await supabase.rpc('save_razorpay_credentials', {
+        p_gym_id: gym.gym_id,
+        p_key_id: data.razorpay_key_id || null,
+        p_key_secret: data.razorpay_key_secret || null,
+        p_webhook_secret: data.razorpay_webhook_secret || null,
+      })
         
       if (error) throw error
       
