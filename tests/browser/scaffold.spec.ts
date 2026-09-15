@@ -361,15 +361,15 @@ test('member payment history requests only the current gym-member payments', asy
  expect(paymentRequests).toBeGreaterThan(0)
 })
 
-test('payment settings save credentials through the authorized RPC', async ({ page }) => {
+test('payment settings save credentials through the authorized Edge Function', async ({ page }) => {
  let directGymWrites=0
- const rpcCalls:{p_gym_id:string;p_key_id:string;p_key_secret:string;p_webhook_secret:string}[]=[]
+ const functionCalls:{gym_id:string;key_id?:string;key_secret?:string;webhook_secret?:string}[]=[]
  await page.route('**/rest/v1/gyms*', route => {
   if(route.request().method()==='PATCH') directGymWrites++
   return route.fulfill({contentType:'application/json',body:'[]'})
  })
- await page.route('**/rest/v1/rpc/save_razorpay_credentials', async route => {
-  rpcCalls.push(route.request().postDataJSON())
+ await page.route('**/functions/v1/save-razorpay-credentials', async route => {
+  functionCalls.push(route.request().postDataJSON())
   return route.fulfill({contentType:'application/json',body:JSON.stringify({saved:true})})
  })
 
@@ -384,11 +384,11 @@ test('payment settings save credentials through the authorized RPC', async ({ pa
  await page.getByRole('button',{name:'Save Credentials'}).click()
 
  await expect(page.getByText('Payment credentials updated successfully')).toBeVisible()
- expect(rpcCalls).toEqual([{
-  p_gym_id:'preview',
-  p_key_id:'rzp_test_fitstack',
-  p_key_secret:'test_key_secret',
-  p_webhook_secret:'test_webhook_secret',
+ expect(functionCalls).toEqual([{
+  gym_id:'preview',
+  key_id:'rzp_test_fitstack',
+  key_secret:'test_key_secret',
+  webhook_secret:'test_webhook_secret',
  }])
  expect(directGymWrites).toBe(0)
 })

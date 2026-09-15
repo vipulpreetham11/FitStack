@@ -23,7 +23,7 @@ export default function PaymentSettingsPage() {
   const { gym, refreshGyms, hasPermission } = useGym()
   const [isSaving, setIsSaving] = useState(false)
 
-  // Only owner can manage payment credentials
+  // The Edge Function independently enforces owner/admin access.
   const canEdit = hasPermission('credentials.manage')
 
   const form = useForm<FormValues>({
@@ -37,19 +37,26 @@ export default function PaymentSettingsPage() {
 
   async function onSubmit(data: FormValues) {
     if (!gym || !supabase || !canEdit) return
+    const keyId = data.razorpay_key_id?.trim()
+    const keySecret = data.razorpay_key_secret?.trim()
+    const webhookSecret = data.razorpay_webhook_secret?.trim()
+    const body: { gym_id: string; key_id?: string; key_secret?: string; webhook_secret?: string } = { gym_id: gym.gym_id }
+    if (keyId) body.key_id = keyId
+    if (keySecret) body.key_secret = keySecret
+    if (webhookSecret) body.webhook_secret = webhookSecret
+    if (!keyId && !keySecret && !webhookSecret) {
+      toast.error('Enter at least one credential to update')
+      return
+    }
     setIsSaving(true)
 
     try {
-      const { error } = await supabase.rpc('save_razorpay_credentials', {
-        p_gym_id: gym.gym_id,
-        p_key_id: data.razorpay_key_id || null,
-        p_key_secret: data.razorpay_key_secret || null,
-        p_webhook_secret: data.razorpay_webhook_secret || null,
-      })
+      const { error } = await supabase.functions.invoke('save-razorpay-credentials', { body })
         
       if (error) throw error
       
       toast.success('Payment credentials updated successfully')
+      form.reset()
       await refreshGyms()
     } catch (error: any) {
       toast.error(error.message || 'Failed to update payment settings')
@@ -70,7 +77,7 @@ export default function PaymentSettingsPage() {
         <SettingsNav />
         <Card>
           <CardContent className="pt-6 text-center text-muted-foreground">
-            You do not have permission to view or manage payment credentials. Only the gym owner can access this page.
+            You do not have permission to view or manage payment credentials. Only gym owners and administrators can access this page.
           </CardContent>
         </Card>
       </div>

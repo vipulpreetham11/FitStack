@@ -7,14 +7,13 @@ const paymentSettingsPage = readFileSync(
 )
 
 describe('payment settings credential save', () => {
-  it('uses the authorized RPC with the deployed parameter contract', () => {
-    expect(paymentSettingsPage).toContain("supabase.rpc('save_razorpay_credentials'")
-    expect(paymentSettingsPage).toContain('p_gym_id: gym.gym_id')
-    expect(paymentSettingsPage).toContain('p_key_id: data.razorpay_key_id || null')
-    expect(paymentSettingsPage).toContain('p_key_secret: data.razorpay_key_secret || null')
-    expect(paymentSettingsPage).toContain(
-      'p_webhook_secret: data.razorpay_webhook_secret || null',
-    )
+  it('uses the authorized Edge Function with the deployed request contract', () => {
+    expect(paymentSettingsPage).toContain("functions.invoke('save-razorpay-credentials'")
+    expect(paymentSettingsPage).toContain('{ gym_id: gym.gym_id }')
+    expect(paymentSettingsPage).toContain('if (keyId) body.key_id = keyId')
+    expect(paymentSettingsPage).toContain('if (keySecret) body.key_secret = keySecret')
+    expect(paymentSettingsPage).toContain('if (webhookSecret) body.webhook_secret = webhookSecret')
+    expect(paymentSettingsPage).not.toContain("supabase.rpc('save_razorpay_credentials'")
   })
 
   it('does not update protected gym credential columns directly', () => {
