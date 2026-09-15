@@ -1,11 +1,13 @@
 import { describe, expect, it } from 'vitest'
 import { readFileSync } from 'node:fs'
-import { parsePaymentResult } from '../src/lib/payment'
+import { parseCheckoutOrderResult, parsePaymentResult } from '../src/lib/payment'
 
 const checkoutSource = readFileSync(
   new URL('../src/components/payments/PlanCheckout.tsx', import.meta.url),
   'utf8',
 )
+const paymentsHookSource = readFileSync(new URL('../src/hooks/usePayments.ts', import.meta.url), 'utf8')
+const indexHtml = readFileSync(new URL('../index.html', import.meta.url), 'utf8')
 
 const success = {
   simulated: true,
@@ -33,7 +35,53 @@ describe('payment RPC responses', () => {
   })
 
   it('routes an explicitly captured checkout response to the success path', () => {
-    expect(checkoutSource).toContain('if (result.captured === true)')
+    expect(checkoutSource).toContain('if (result.free === true || result.captured === true)')
     expect(checkoutSource).toContain("await completePayment(result.paymentId, true)")
+  })
+})
+
+describe('Razorpay Edge Function responses', () => {
+  it('normalizes a paid order response from the deployed function', () => {
+    expect(parseCheckoutOrderResult({
+      free: false,
+      orderId: 'order_test',
+      amount: 525000,
+      totalPaise: 525000,
+      currency: 'INR',
+      keyId: 'rzp_test_fitstack',
+      paymentId: success.paymentId,
+    })).toMatchObject({
+      free: false,
+      captured: false,
+      orderId: 'order_test',
+      totalPaise: 525000,
+      razorpayKeyId: 'rzp_test_fitstack',
+      paymentId: success.paymentId,
+    })
+  })
+
+  it('treats a free checkout response as captured without requiring Razorpay fields', () => {
+    expect(parseCheckoutOrderResult({
+      free: true,
+      paymentId: success.paymentId,
+      membershipId: success.membershipId,
+      invoiceId: success.invoiceId,
+    })).toMatchObject({ free: true, captured: true, totalPaise: 0 })
+  })
+
+  it('accepts a captured simulation returned by the credentials fallback', () => {
+    expect(parseCheckoutOrderResult(success)).toMatchObject({
+      free: false,
+      simulated: true,
+      captured: true,
+      paymentId: success.paymentId,
+    })
+  })
+
+  it('uses the Edge Function first and limits simulation to the credentials fallback', () => {
+    expect(paymentsHookSource).toContain("functions.invoke('create-razorpay-order'")
+    expect(paymentsHookSource).toMatch(/failure\.status === 400.*Razorpay credentials are not configured/s)
+    expect(paymentsHookSource).not.toContain('isPaymentDevMode')
+    expect(indexHtml).toContain('src="https://checkout.razorpay.com/v1/checkout.js"')
   })
 })

@@ -124,18 +124,20 @@ export function PlanCheckout({ open, onOpenChange, member, initialPlan, onSucces
     const attemptedAfter = new Date(Date.now() - 5 * 60 * 1000).toISOString()
     try {
       const result = await createOrder({ planId: plan.id, memberId: member.id, startDate, promoCode: quote?.promoCode ?? undefined })
-      setQuote(result)
-      if (result.captured === true) {
+      if (result.free === true || result.captured === true) {
         await completePayment(result.paymentId, true)
         return
       }
       if (!result.orderId || !result.paymentId || !result.razorpayKeyId) throw new Error('Checkout could not be initialized')
       await openRazorpayCheckout({
         orderId: result.orderId, amount: result.totalPaise, currency: result.currency,
-        gymName: gym?.name ?? 'FitStack', gymLogo: gym?.logo_url, customerName: member.name,
-        customerPhone: member.phone ?? '', customerEmail: member.email,
+        gymName: gym?.name ?? 'FitStack', description: plan.name, gymLogo: gym?.logo_url, brandColor: gym?.brand_color,
+        customerName: member.name, customerPhone: member.phone ?? '', customerEmail: member.email,
         razorpayKeyId: result.razorpayKeyId,
-        onSuccess: () => { void completePayment(result.paymentId) },
+        onSuccess: () => {
+          void completePayment(result.paymentId, true)
+          void handlePaymentSuccess(result.paymentId).catch(() => undefined)
+        },
         onFailure: error => {
           const dismissed = typeof error === 'object' && error !== null && 'reason' in error && (error as { reason?: string }).reason === 'dismissed'
           setFailure(dismissed ? 'Checkout was closed before payment. You can try again when ready.' : 'Payment failed. No membership was created. Please try again.')

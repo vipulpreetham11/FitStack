@@ -3,7 +3,7 @@ import { FunctionsHttpError } from '@supabase/supabase-js'
 import { supabase } from '@/lib/supabase'
 import { useGym } from '@/hooks/useGym'
 import { toDateOnly } from '@/lib/membership'
-import { parsePaymentResult } from '@/lib/payment'
+import { parseCheckoutOrderResult, parsePaymentResult, type CheckoutOrderResult } from '@/lib/payment'
 import type { Database } from '@/types/database'
 
 type PaymentRow = Database['public']['Tables']['payments']['Row']
@@ -40,13 +40,14 @@ export type OrderResult = PricingBreakdown & {
 type OrderInput = { planId: string; memberId: string; startDate: string; promoCode?: string }
 export type CheckoutMembership = { id: string; status: 'active' | 'frozen' | 'scheduled' }
 
-export const isPaymentDevMode = import.meta.env.DEV || import.meta.env.VITE_DEV_MODE === 'true'
-
-async function functionMessage(error: unknown) {
+async function functionFailure(error: unknown) {
   if (error instanceof FunctionsHttpError) {
-    try { const body = await error.context.json(); return String(body.error ?? body.message ?? error.message) } catch { return error.message }
+    try {
+      const body = await error.context.clone().json()
+      return { status: error.context.status, message: String(body.error ?? body.message ?? error.message) }
+    } catch { return { status: error.context.status, message: error.message } }
   }
-  return error instanceof Error ? error.message : 'Payment request failed'
+  return { status: null, message: error instanceof Error ? error.message : 'Payment request failed' }
 }
 
 export function usePayments() {
@@ -74,36 +75,47 @@ export function usePayments() {
 
   useEffect(() => { void refresh() }, [refresh])
 
-  const invokeOrder = useCallback(async (input: OrderInput, preview: boolean): Promise<OrderResult> => {
+  const simulateOrder = useCallback(async (input: OrderInput, preview: boolean): Promise<OrderResult> => {
     if (!gym || !supabase) throw new Error('Supabase is not configured')
-    if (isPaymentDevMode) {
-      const { data, error: rpcError } = await supabase.rpc('simulate_payment_checkout', {
-        p_gym_id: gym.gym_id,
-        p_member_id: input.memberId,
-        p_plan_id: input.planId,
-        p_start_date: input.startDate,
-        p_promo_code: input.promoCode?.trim().toUpperCase() || null,
-        p_preview: preview,
-      })
-      if (rpcError) throw rpcError
-      return parsePaymentResult<OrderResult>(data)
-    }
-    const { data, error: invokeError } = await supabase.functions.invoke('create-razorpay-order', { body: {
-      gym_id: gym.gym_id, member_id: input.memberId, plan_id: input.planId, start_date: input.startDate,
-      promo_code: input.promoCode?.trim().toUpperCase() || null, preview,
-    } })
-    if (invokeError) throw new Error(await functionMessage(invokeError))
-    if (data?.error) throw new Error(String(data.error))
+    const { data, error: rpcError } = await supabase.rpc('simulate_payment_checkout', {
+      p_gym_id: gym.gym_id,
+      p_member_id: input.memberId,
+      p_plan_id: input.planId,
+      p_start_date: input.startDate,
+      p_promo_code: input.promoCode?.trim().toUpperCase() || null,
+      p_preview: preview,
+    })
+    if (rpcError) throw rpcError
     return parsePaymentResult<OrderResult>(data)
   }, [gym])
 
+  const invokeOrder = useCallback(async (input: OrderInput): Promise<CheckoutOrderResult> => {
+    if (!gym || !supabase) throw new Error('Supabase is not configured')
+    const { data, error: invokeError } = await supabase.functions.invoke('create-razorpay-order', { body: {
+      gym_id: gym.gym_id, member_id: input.memberId, plan_id: input.planId, start_date: input.startDate,
+      promo_code: input.promoCode?.trim().toUpperCase() || null,
+    } })
+    if (invokeError) {
+      const failure = await functionFailure(invokeError)
+      if (failure.status === 400 && /Razorpay credentials are not configured/i.test(failure.message)) {
+        return parseCheckoutOrderResult(await simulateOrder(input, false))
+      }
+      throw new Error(failure.message)
+    }
+    if (data?.error) throw new Error(String(data.error))
+    return parseCheckoutOrderResult(data)
+  }, [gym, simulateOrder])
+
   const createOrder = useCallback(async (input: OrderInput) => {
-    const result = await invokeOrder(input, false)
+    const result = await invokeOrder(input)
     await refresh()
     return result
   }, [invokeOrder, refresh])
 
-  const previewOrder = useCallback((input: OrderInput) => invokeOrder(input, true), [invokeOrder])
+  const previewOrder = useCallback(async (input: OrderInput) => {
+    const result = await simulateOrder(input, true)
+    return { ...result, simulated: false }
+  }, [simulateOrder])
 
   const reconcileCompletedCheckout = useCallback(async (input: OrderInput, attemptedAfter: string): Promise<CheckoutMembership | null> => {
     if (!gym || !supabase) return null

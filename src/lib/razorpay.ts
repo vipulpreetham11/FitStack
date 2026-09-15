@@ -9,7 +9,9 @@ export interface RazorpayCheckoutOptions {
   amount: number
   currency: string
   gymName: string
+  description: string
   gymLogo?: string | null
+  brandColor?: string | null
   customerName: string
   customerPhone: string
   customerEmail?: string | null
@@ -50,10 +52,11 @@ export async function openRazorpayCheckout(options: RazorpayCheckoutOptions) {
     amount: options.amount,
     currency: options.currency || 'INR',
     name: options.gymName,
+    description: options.description,
     image: options.gymLogo || undefined,
     order_id: options.orderId,
     prefill: { name: options.customerName, contact: options.customerPhone, email: options.customerEmail || undefined },
-    theme: { color: '#171717' },
+    theme: { color: options.brandColor || '#171717' },
     handler: (response: RazorpaySuccessResponse) => { completed = true; options.onSuccess(response) },
     modal: { ondismiss: () => { if (!completed) options.onFailure({ reason: 'dismissed' }) } },
   })

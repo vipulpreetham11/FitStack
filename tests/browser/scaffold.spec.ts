@@ -186,6 +186,9 @@ const routes = [
     "url": "/super-admin/gyms/new"
   }
 ]
+test.beforeEach(async({page})=>{
+ await page.route('https://checkout.razorpay.com/v1/checkout.js',route=>route.fulfill({contentType:'application/javascript',body:''}))
+})
 test('all routes, guards, mobile navigation and themes',async({page})=>{
  test.setTimeout(90000)
  const errors:string[]=[];page.on('pageerror',e=>errors.push(e.message))
@@ -390,7 +393,7 @@ test('payment settings save credentials through the authorized RPC', async ({ pa
  expect(directGymWrites).toBe(0)
 })
 
-test('development checkout bypasses the Edge Function and completes the membership sale', async ({ page }) => {
+test('missing Razorpay credentials fall back to the development checkout RPC', async ({ page }) => {
  const plan={
   id:'00000000-0000-4000-8000-000000000120',gym_id:'preview',name:'Monthly',description:null,
   price:1000,duration_type:'months',duration_value:1,features:[],max_freezes:0,max_freeze_days:null,
@@ -398,7 +401,10 @@ test('development checkout bypasses the Edge Function and completes the membersh
  }
  let edgeCalls=0
  const rpcCalls:{p_preview:boolean;p_member_id:string}[]=[]
- await page.route('**/functions/v1/create-razorpay-order', route => { edgeCalls++; return route.abort() })
+ await page.route('**/functions/v1/create-razorpay-order', route => {
+  edgeCalls++
+  return route.fulfill({status:400,contentType:'application/json',body:JSON.stringify({error:'Razorpay credentials are not configured'})})
+ })
  await page.route('**/rest/v1/membership_plans*', route => route.fulfill({contentType:'application/json',body:JSON.stringify([plan])}))
  await page.route('**/rest/v1/payments*', route => route.fulfill({contentType:'application/json',body:'[]'}))
  await page.route('**/rest/v1/rpc/simulate_payment_checkout', async route => {
@@ -419,7 +425,7 @@ test('development checkout bypasses the Edge Function and completes the membersh
  await page.evaluate(()=>{history.pushState({},'','/member/plans');window.dispatchEvent(new PopStateEvent('popstate'))})
  await expect(page.getByRole('heading',{name:'Explore plans'})).toBeVisible()
  await page.getByRole('button',{name:'Buy Now'}).click()
- await expect(page.getByText('Development mode',{exact:true})).toBeVisible()
+ await expect(page.getByText('Development mode',{exact:true})).toHaveCount(0)
  await page.getByRole('button',{name:/^Pay /}).click()
  await expect(page.getByRole('heading',{name:'Payment successful'})).toBeVisible()
  await expect(page.getByText('The membership and invoice are ready.')).toBeVisible()
@@ -427,7 +433,91 @@ test('development checkout bypasses the Edge Function and completes the membersh
  expect(rpcCalls.filter(call=>!call.p_preview)).toHaveLength(1)
  expect(rpcCalls.at(-1)?.p_preview).toBe(false)
  expect(rpcCalls.every(call=>call.p_member_id==='preview')).toBe(true)
- expect(edgeCalls).toBe(0)
+ expect(edgeCalls).toBe(1)
+})
+
+test('configured Razorpay checkout uses the Edge Function and opens the real modal', async ({ page }) => {
+ const plan={
+  id:'00000000-0000-4000-8000-000000000125',gym_id:'preview',name:'Premium',description:null,
+  price:5000,duration_type:'months',duration_value:1,features:[],max_freezes:0,max_freeze_days:null,
+  allow_future_start:true,is_active:true,sort_order:0,created_by:null,created_at:'2026-09-13T10:00:00Z',updated_at:'2026-09-13T10:00:00Z',
+ }
+ const paymentId='00000000-0000-4000-8000-000000000126'
+ const edgeCalls:Record<string,unknown>[]=[]
+ await page.addInitScript(()=>{
+  ;(window as any).Razorpay=function(options:any){
+   ;(window as any).__fitstackRazorpayOptions=options
+   return {on:()=>undefined,open:()=>options.handler({razorpay_payment_id:'pay_test',razorpay_order_id:options.order_id,razorpay_signature:'signature_test'})}
+  }
+ })
+ await page.route('**/rest/v1/membership_plans*', route => route.fulfill({contentType:'application/json',body:JSON.stringify([plan])}))
+ await page.route('**/rest/v1/payments*', route => {
+  const select=new URL(route.request().url()).searchParams.get('select')
+  return route.fulfill({contentType:'application/json',body:select==='status'?JSON.stringify({status:'captured'}):'[]'})
+ })
+ await page.route('**/rest/v1/rpc/simulate_payment_checkout', async route => {
+  const body=route.request().postDataJSON() as {p_preview:boolean}
+  expect(body.p_preview).toBe(true)
+  return route.fulfill({contentType:'application/json',body:JSON.stringify({
+   amount:5000,discountAmount:0,taxableAmount:5000,gstRate:5,cgstAmount:125,sgstAmount:125,
+   totalAmount:5250,totalPaise:525000,promoCodeId:null,promoCode:null,currency:'INR',simulated:false,
+   orderId:null,paymentId:null,razorpayKeyId:null,captured:false,
+  })})
+ })
+ await page.route('**/functions/v1/create-razorpay-order', async route => {
+  edgeCalls.push(route.request().postDataJSON())
+  return route.fulfill({contentType:'application/json',body:JSON.stringify({
+   free:false,orderId:'order_fitstack_test',amount:525000,totalPaise:525000,currency:'INR',
+   keyId:'rzp_test_fitstack',paymentId,
+  })})
+ })
+
+ await page.goto('/login')
+ await page.locator('summary').click()
+ await page.getByRole('button',{name:'member',exact:true}).click()
+ await page.evaluate(()=>{history.pushState({},'','/member/plans');window.dispatchEvent(new PopStateEvent('popstate'))})
+ await page.getByRole('button',{name:'Buy Now'}).click()
+ await page.getByRole('button',{name:/^Pay /}).click()
+ await expect(page.getByRole('heading',{name:'Payment successful'})).toBeVisible()
+ await expect(page.getByRole('heading',{name:'Payment not completed'})).toHaveCount(0)
+ expect(edgeCalls).toEqual([{
+  gym_id:'preview',member_id:'preview',plan_id:plan.id,start_date:expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/),promo_code:null,
+ }])
+ const options=await page.evaluate(()=>(window as any).__fitstackRazorpayOptions)
+ expect(options).toMatchObject({
+  key:'rzp_test_fitstack',amount:525000,currency:'INR',order_id:'order_fitstack_test',
+  name:'FitStack Studio',description:'Premium',theme:{color:'#171717'},
+ })
+})
+
+test('a free Edge Function checkout succeeds without opening Razorpay', async ({ page }) => {
+ const plan={
+  id:'00000000-0000-4000-8000-000000000127',gym_id:'preview',name:'Complimentary',description:null,
+  price:0,duration_type:'months',duration_value:1,features:[],max_freezes:0,max_freeze_days:null,
+  allow_future_start:true,is_active:true,sort_order:0,created_by:null,created_at:'2026-09-13T10:00:00Z',updated_at:'2026-09-13T10:00:00Z',
+ }
+ await page.addInitScript(()=>{
+  ;(window as any).__fitstackRazorpayOpened=0
+  ;(window as any).Razorpay=function(){return {on:()=>undefined,open:()=>{;(window as any).__fitstackRazorpayOpened++}}}
+ })
+ await page.route('**/rest/v1/membership_plans*', route => route.fulfill({contentType:'application/json',body:JSON.stringify([plan])}))
+ await page.route('**/rest/v1/payments*', route => route.fulfill({contentType:'application/json',body:'[]'}))
+ await page.route('**/rest/v1/rpc/simulate_payment_checkout', route => route.fulfill({contentType:'application/json',body:JSON.stringify({
+  amount:0,discountAmount:0,taxableAmount:0,gstRate:0,cgstAmount:0,sgstAmount:0,totalAmount:0,totalPaise:0,
+  promoCodeId:null,promoCode:null,currency:'INR',simulated:false,orderId:null,paymentId:null,razorpayKeyId:null,captured:false,
+ })}))
+ await page.route('**/functions/v1/create-razorpay-order', route => route.fulfill({contentType:'application/json',body:JSON.stringify({
+  free:true,paymentId:'00000000-0000-4000-8000-000000000128',membershipId:'00000000-0000-4000-8000-000000000129',invoiceId:'00000000-0000-4000-8000-000000000130',
+ })}))
+
+ await page.goto('/login')
+ await page.locator('summary').click()
+ await page.getByRole('button',{name:'member',exact:true}).click()
+ await page.evaluate(()=>{history.pushState({},'','/member/plans');window.dispatchEvent(new PopStateEvent('popstate'))})
+ await page.getByRole('button',{name:'Buy Now'}).click()
+ await page.getByRole('button',{name:'Activate free plan'}).click()
+ await expect(page.getByRole('heading',{name:'Payment successful'})).toBeVisible()
+ expect(await page.evaluate(()=>(window as any).__fitstackRazorpayOpened)).toBe(0)
 })
 
 test('a lost checkout response reconciles an active membership instead of showing payment failure', async ({ page }) => {
@@ -445,11 +535,14 @@ test('a lost checkout response reconciles an active membership instead of showin
  }))
  await page.route('**/rest/v1/rpc/simulate_payment_checkout', async route => {
   const body=route.request().postDataJSON() as {p_preview:boolean}
-  if(body.p_preview) return route.fulfill({contentType:'application/json',body:JSON.stringify({
+  expect(body.p_preview).toBe(true)
+  return route.fulfill({contentType:'application/json',body:JSON.stringify({
    amount:5000,discountAmount:0,taxableAmount:5000,gstRate:5,cgstAmount:125,sgstAmount:125,
    totalAmount:5250,totalPaise:525000,promoCodeId:null,promoCode:null,currency:'INR',simulated:true,
    orderId:null,paymentId:null,razorpayKeyId:null,captured:false,
   })})
+ })
+ await page.route('**/functions/v1/create-razorpay-order', route => {
   mutationCalls++
   return route.fulfill({status:503,contentType:'application/json',body:JSON.stringify({message:'Checkout response was lost'})})
  })
@@ -459,7 +552,6 @@ test('a lost checkout response reconciles an active membership instead of showin
  await page.getByRole('button',{name:'member',exact:true}).click()
  await page.evaluate(()=>{history.pushState({},'','/member/plans');window.dispatchEvent(new PopStateEvent('popstate'))})
  await page.getByRole('button',{name:'Buy Now'}).click()
- await expect(page.getByText('Development mode',{exact:true})).toBeVisible()
  await page.getByRole('button',{name:/^Pay /}).click()
  await expect(page.getByRole('heading',{name:'Payment successful'})).toBeVisible()
  await expect(page.getByText('Membership already active.')).toBeVisible()
