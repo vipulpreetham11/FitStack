@@ -1,69 +1,92 @@
-﻿import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { QRCodeSVG } from 'qrcode.react'
 import { supabase } from '@/lib/supabase'
-import { useAuth } from '@/hooks/useAuth'
 import { useGym } from '@/hooks/useGym'
 
 type QrStage = 'loading' | 'ready' | 'refreshing' | 'error'
 
-function devToken(gymId: string, memberId: string) {
-  return `${gymId}:${memberId}:${Math.floor(Date.now() / 1000)}:dev-mode`
+type QrTokenResponse = {
+  token: string
+  member_id: string
+  gym_id: string
+  expires_in: number
 }
 
 export default function MemberQRPage() {
-  const { user } = useAuth()
   const { gym, gymMember } = useGym()
-  const [token, setToken] = useState<string | null>(null)
+  const [qrPayload, setQrPayload] = useState<string | null>(null)
   const [stage, setStage] = useState<QrStage>('loading')
-  const [secondsLeft, setSecondsLeft] = useState(55)
-  const [devMode, setDevMode] = useState(false)
+  const [secondsLeft, setSecondsLeft] = useState(60)
+  const [tokenLifetime, setTokenLifetime] = useState(60)
+  const [refreshAt, setRefreshAt] = useState<number | null>(null)
+  const [errorMessage, setErrorMessage] = useState<string | null>(null)
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
   const fetchToken = useCallback(async (quiet = false) => {
-    if (!gym || !gymMember || !user) return
+    if (!gym) return
     if (!quiet) setStage('loading')
     else setStage('refreshing')
+    setErrorMessage(null)
+
     try {
-      if (!supabase) throw new Error('not-configured')
-      const { data, error } = await supabase.functions.invoke('generate-qr-token', { body: { gym_id: gym.gym_id } })
-      if (error || !data?.token) throw error ?? new Error('no-token')
-      setToken(data.token as string)
-      setDevMode(false)
+      if (!supabase) throw new Error('QR service is not configured')
+
+      const { data, error } = await supabase.functions.invoke('generate-qr-token', {
+        body: { gym_id: gym.gym_id },
+      })
+
+      if (error) throw error
+
+      const response = data as Partial<QrTokenResponse> | null
+      if (
+        !response ||
+        typeof response.token !== 'string' ||
+        typeof response.member_id !== 'string' ||
+        typeof response.gym_id !== 'string' ||
+        typeof response.expires_in !== 'number' ||
+        !Number.isFinite(response.expires_in) ||
+        response.expires_in <= 0
+      ) {
+        throw new Error('The QR service returned an invalid response')
+      }
+
+      const expiresIn = Math.max(1, Math.ceil(response.expires_in))
+      setQrPayload(`fitstack:${response.gym_id}:${response.member_id}:${response.token}`)
+      setTokenLifetime(expiresIn)
+      setSecondsLeft(expiresIn)
+      setRefreshAt(Date.now() + expiresIn * 1000)
       setStage('ready')
-      setSecondsLeft(55)
-    } catch {
-      // Fallback: dev-mode token
-      setToken(devToken(gym.gym_id, gymMember.id))
-      setDevMode(true)
-      setStage('ready')
-      setSecondsLeft(55)
+    } catch (error) {
+      setQrPayload(null)
+      setRefreshAt(null)
+      setSecondsLeft(0)
+      setErrorMessage(error instanceof Error ? error.message : 'Could not generate your QR code')
+      setStage('error')
     }
-  }, [gym, gymMember, user])
+  }, [gym])
 
   useEffect(() => { void fetchToken() }, [fetchToken])
 
-  // Countdown + auto-refresh
   useEffect(() => {
-    if (stage !== 'ready') return
-    timerRef.current = setInterval(() => {
-      setSecondsLeft(prev => {
-        if (prev <= 1) { void fetchToken(true); return 55 }
-        return prev - 1
-      })
-    }, 1000)
+    if (stage !== 'ready' || refreshAt === null) return
+
+    const updateCountdown = () => {
+      const remaining = Math.max(0, Math.ceil((refreshAt - Date.now()) / 1000))
+      setSecondsLeft(remaining)
+      if (remaining === 0) void fetchToken(true)
+    }
+
+    timerRef.current = setInterval(updateCountdown, 1000)
     return () => { if (timerRef.current) clearInterval(timerRef.current) }
-  }, [stage, fetchToken])
+  }, [stage, refreshAt, fetchToken])
 
   const circumference = 2 * Math.PI * 44
-  const progress = secondsLeft / 55
+  const progress = Math.min(1, secondsLeft / tokenLifetime)
   const strokeDash = circumference * (1 - progress)
-
   const initials = (gym?.name ?? 'GY').slice(0, 2).toUpperCase()
 
   return (
-    // Force white background regardless of dark mode — QR codes scan better
     <div className="fixed inset-0 bg-white flex flex-col items-center justify-start overflow-y-auto" style={{ color: '#171717' }}>
-      {/* Gym header */}
       <div className="mt-10 flex flex-col items-center gap-2">
         {gym?.logo_url ? (
           <img src={gym.logo_url} alt={gym.name} className="h-12 w-12 rounded-xl object-cover" />
@@ -73,12 +96,10 @@ export default function MemberQRPage() {
         <p className="text-sm font-medium text-gray-500">{gym?.name ?? 'Your Gym'}</p>
       </div>
 
-      {/* Member name */}
       <div className="mt-6 text-center px-6">
         <p className="text-2xl font-semibold tracking-tight">{gymMember ? 'Your Entry QR' : 'Loading...'}</p>
       </div>
 
-      {/* QR area with countdown ring */}
       <div className="mt-8 relative flex items-center justify-center">
         <svg className="absolute" width="300" height="300" viewBox="0 0 100 100">
           <circle cx="50" cy="50" r="44" fill="none" stroke="#e5e7eb" strokeWidth="3" />
@@ -94,31 +115,32 @@ export default function MemberQRPage() {
         </svg>
 
         <div className={`relative z-10 p-5 bg-white rounded-2xl shadow-sm transition-opacity duration-500 ${stage === 'refreshing' ? 'opacity-40' : 'opacity-100'}`}>
-          {(stage === 'loading') ? (
+          {stage === 'loading' ? (
             <div className="w-[250px] h-[250px] flex items-center justify-center">
               <div className="w-8 h-8 border-2 border-gray-200 border-t-gray-900 rounded-full animate-spin" />
             </div>
-          ) : token ? (
-            <QRCodeSVG value={token} size={250} bgColor="#ffffff" fgColor="#171717" level="M" />
+          ) : qrPayload ? (
+            <QRCodeSVG value={qrPayload} size={250} bgColor="#ffffff" fgColor="#171717" level="M" />
+          ) : stage === 'error' ? (
+            <div className="w-[250px] h-[250px] flex flex-col items-center justify-center px-5 text-center">
+              <p className="text-sm text-red-600">{errorMessage ?? 'Could not generate your QR code'}</p>
+              <button
+                type="button"
+                className="mt-4 rounded-lg bg-gray-900 px-4 py-2 text-sm font-medium text-white"
+                onClick={() => void fetchToken()}
+              >
+                Try again
+              </button>
+            </div>
           ) : null}
         </div>
       </div>
 
-      {/* Countdown */}
-      {stage === 'ready' && (
+      {(stage === 'ready' || stage === 'refreshing') && (
         <p className="mt-4 text-sm text-gray-400">Refreshes in {secondsLeft}s</p>
       )}
 
-      {/* Instruction */}
       <p className="mt-6 text-base font-medium text-gray-700 text-center px-8">Show this to the front desk</p>
-
-      {/* Dev mode banner */}
-      {devMode && (
-        <div className="mt-6 mx-6 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-700 text-center">
-          Dev mode — QR not cryptographically signed
-        </div>
-      )}
-
       <div className="h-16" />
     </div>
   )
