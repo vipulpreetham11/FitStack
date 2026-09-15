@@ -1,10 +1,10 @@
 import { useState, useEffect } from 'react'
-import { useNavigate, Link } from 'react-router-dom'
+import { Link } from 'react-router-dom'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
 import { toast } from 'sonner'
-import { ChevronLeft } from 'lucide-react'
+import { CheckCircle2, ChevronLeft, Copy } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
 import { useGym } from '@/hooks/useGym'
 import { normalizePhone } from '@/lib/format'
@@ -26,10 +26,13 @@ const formSchema = z.object({
 
 type FormValues = z.infer<typeof formSchema>
 
+const MEMBER_INVITE_LINK = 'https://fitstack.pages.dev/join/afterburn'
+
 export default function CreateMemberPage() {
-  const navigate = useNavigate()
   const { gym, hasPermission } = useGym()
   const [isSubmitting, setIsSubmitting] = useState(false)
+  const [createdMember, setCreatedMember] = useState<{ id: string; name: string } | null>(null)
+  const [inviteLinkCopied, setInviteLinkCopied] = useState(false)
 
   const isStaff = hasPermission('settings.manage') // only owner/admin can create other admins
 
@@ -123,7 +126,6 @@ export default function CreateMemberPage() {
           role: data.role,
           member_code: data.member_code || null,
           is_active: true,
-          qr_secret: Array.from({length: 32}, () => Math.floor(Math.random()*36).toString(36)).join(''),
         })
         .select('id')
         .single()
@@ -131,12 +133,22 @@ export default function CreateMemberPage() {
       if (memberError) throw new Error(`Failed to add member to gym: ${memberError.message}`)
 
       toast.success(`${data.full_name} has been added successfully!`)
-      navigate(`/admin/members/${newMember.id}`)
+      setCreatedMember({ id: newMember.id, name: data.full_name })
       
     } catch (error: any) {
       toast.error(error.message || 'Failed to create member')
     } finally {
       setIsSubmitting(false)
+    }
+  }
+
+  const copyInviteLink = async () => {
+    try {
+      await navigator.clipboard.writeText(MEMBER_INVITE_LINK)
+      setInviteLinkCopied(true)
+      toast.success('Invite link copied')
+    } catch {
+      toast.error('Could not copy the invite link')
     }
   }
 
@@ -149,10 +161,50 @@ export default function CreateMemberPage() {
       </div>
 
       <div>
-        <h1 className="text-3xl font-semibold tracking-tight">Add New Member</h1>
-        <p className="text-muted-foreground mt-2">Register a new member or staff to {gym?.name}.</p>
+        <h1 className="text-3xl font-semibold tracking-tight">
+          {createdMember ? 'Member Added' : 'Add New Member'}
+        </h1>
+        <p className="text-muted-foreground mt-2">
+          {createdMember
+            ? `${createdMember.name} is ready to join ${gym?.name}.`
+            : `Register a new member or staff to ${gym?.name}.`}
+        </p>
       </div>
 
+      {createdMember ? (
+        <Card>
+          <CardContent className="pt-6 space-y-6">
+            <div className="flex items-start gap-3">
+              <CheckCircle2 className="mt-0.5 h-6 w-6 shrink-0 text-green-600" />
+              <div>
+                <h2 className="text-lg font-semibold">Member created successfully</h2>
+                <p className="mt-1 text-sm text-muted-foreground">
+                  Share this link with the member to let them set up their account.
+                </p>
+              </div>
+            </div>
+
+            <div className="flex flex-col gap-3 sm:flex-row">
+              <Input
+                aria-label="Member invite link"
+                readOnly
+                value={MEMBER_INVITE_LINK}
+                onFocus={(event) => event.currentTarget.select()}
+              />
+              <Button type="button" variant="outline" onClick={copyInviteLink} className="shrink-0">
+                <Copy className="mr-2 h-4 w-4" />
+                {inviteLinkCopied ? 'Copied' : 'Copy link'}
+              </Button>
+            </div>
+          </CardContent>
+          <CardFooter className="flex justify-end border-t pt-6">
+            <Button
+              nativeButton={false}
+              render={<Link to={`/admin/members/${createdMember.id}`}>View Member</Link>}
+            />
+          </CardFooter>
+        </Card>
+      ) : (
       <Card>
         <Form {...form}>
           <form onSubmit={form.handleSubmit(onSubmit)}>
@@ -254,6 +306,7 @@ export default function CreateMemberPage() {
           </form>
         </Form>
       </Card>
+      )}
     </div>
   )
 }

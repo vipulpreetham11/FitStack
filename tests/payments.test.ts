@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest'
+import { readFileSync } from 'node:fs'
 import { parsePaymentResult } from '../src/lib/payment'
+
+const checkoutSource = readFileSync(
+  new URL('../src/components/payments/PlanCheckout.tsx', import.meta.url),
+  'utf8',
+)
 
 const success = {
   simulated: true,
@@ -24,5 +30,10 @@ describe('payment RPC responses', () => {
 
   it('rejects a response without an explicit boolean captured field', () => {
     expect(() => parsePaymentResult({ ...success, captured: 'true' })).toThrow(/invalid response/i)
+  })
+
+  it('routes an explicitly captured checkout response to the success path', () => {
+    expect(checkoutSource).toContain('if (result.captured === true)')
+    expect(checkoutSource).toContain("await completePayment(result.paymentId, true)")
   })
 })
