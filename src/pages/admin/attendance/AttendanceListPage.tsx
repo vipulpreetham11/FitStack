@@ -6,17 +6,22 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
-import { Card, CardContent } from '@/components/ui/card'
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { QuickCheckInPanel } from '@/components/attendance/QuickCheckInPanel'
 import { useAttendance } from '@/hooks/useAttendance'
+import { useGym } from '@/hooks/useGym'
 import { formatDateTime } from '@/lib/format'
 
 const METHOD_LABELS: Record<string, string> = { qr: 'QR', manual: 'Manual', biometric: 'Biometric' }
 const METHOD_COLORS: Record<string, string> = { qr: 'bg-sky-100 text-sky-700 dark:bg-sky-950 dark:text-sky-300', manual: 'bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-300', biometric: 'bg-purple-100 text-purple-700 dark:bg-purple-950 dark:text-purple-300' }
 
 export default function AttendanceListPage() {
-  const { todayAttendance, loading, error, stats } = useAttendance()
+  const { role } = useGym()
+  const { todayAttendance, loading, error, refresh, stats } = useAttendance()
   const [search, setSearch] = useState('')
   const [methodFilter, setMethodFilter] = useState<string>('all')
+  const canQuickCheckIn = role !== null && ['owner', 'admin', 'receptionist'].includes(role)
+  const currentlyCheckedIn = todayAttendance
 
   const filtered = todayAttendance.filter(a => {
     const name = a.member?.profiles?.full_name?.toLowerCase() ?? ''
@@ -51,6 +56,37 @@ export default function AttendanceListPage() {
           </Card>
         ))}
       </div>
+
+      {canQuickCheckIn && (
+        <div className="grid gap-4 lg:grid-cols-2">
+          <QuickCheckInPanel onCheckedIn={refresh} />
+          <Card className="h-full">
+            <CardHeader>
+              <CardTitle>Currently Checked In</CardTitle>
+              <CardDescription>Live check-ins recorded today.</CardDescription>
+            </CardHeader>
+            <CardContent>
+              {loading ? (
+                <div className="space-y-2">{[0, 1, 2].map(item => <Skeleton key={item} className="h-14" />)}</div>
+              ) : currentlyCheckedIn.length === 0 ? (
+                <div className="rounded-lg border border-dashed py-10 text-center text-sm text-muted-foreground">No members are currently checked in.</div>
+              ) : (
+                <div className="divide-y">
+                  {currentlyCheckedIn.slice(0, 8).map(item => (
+                    <div key={item.id} className="flex items-center justify-between gap-3 py-3 first:pt-0 last:pb-0">
+                      <div className="min-w-0">
+                        <p className="truncate font-medium">{item.member?.profiles?.full_name ?? 'Unknown member'}</p>
+                        <p className="text-sm text-muted-foreground">{formatDateTime(item.check_in_at).split(', ')[1]}</p>
+                      </div>
+                      <Badge className={METHOD_COLORS[item.method ?? 'manual'] ?? ''}>{METHOD_LABELS[item.method ?? 'manual'] ?? item.method}</Badge>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        </div>
+      )}
 
       {/* Filters */}
       <div className="flex flex-wrap gap-3">

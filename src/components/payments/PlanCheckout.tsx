@@ -97,11 +97,19 @@ export function PlanCheckout({ open, onOpenChange, member, initialPlan, onSucces
   async function showSuccess(message = 'The membership and invoice are ready.') {
     setSuccessMessage(message)
     setStage('success')
+    toast.success('Payment successful! Membership activated.')
+    onOpenChange(false)
     try {
       await onSuccess?.()
     } catch {
       toast.warning('Payment succeeded, but the latest membership details could not be refreshed. Refresh the page to try again.')
     }
+  }
+
+  function showFailure(message: string) {
+    setFailure(message)
+    setStage('failure')
+    toast.error(message)
   }
 
   async function completePayment(paymentId: string | null, alreadyCaptured = false) {
@@ -111,8 +119,7 @@ export function PlanCheckout({ open, onOpenChange, member, initialPlan, onSucces
         await handlePaymentSuccess(paymentId)
       }
     } catch (cause) {
-      setFailure(cause instanceof Error ? cause.message : 'Payment could not be confirmed')
-      setStage('failure')
+      showFailure(cause instanceof Error ? cause.message : 'Payment could not be confirmed')
       return
     }
     await showSuccess()
@@ -134,14 +141,17 @@ export function PlanCheckout({ open, onOpenChange, member, initialPlan, onSucces
         gymName: gym?.name ?? 'FitStack', description: plan.name, gymLogo: gym?.logo_url, brandColor: gym?.brand_color,
         customerName: member.name, customerPhone: member.phone ?? '', customerEmail: member.email,
         razorpayKeyId: result.razorpayKeyId,
-        onSuccess: () => {
-          void completePayment(result.paymentId, true)
-          void handlePaymentSuccess(result.paymentId).catch(() => undefined)
+        onSuccess: response => {
+          if (!response.razorpay_payment_id) {
+            showFailure('Payment confirmation is missing. Please check payment history before trying again.')
+            return
+          }
+          void showSuccess()
+          void handlePaymentSuccess(result.paymentId).then(() => onSuccess?.()).catch(() => undefined)
         },
         onFailure: error => {
           const dismissed = typeof error === 'object' && error !== null && 'reason' in error && (error as { reason?: string }).reason === 'dismissed'
-          setFailure(dismissed ? 'Checkout was closed before payment. You can try again when ready.' : 'Payment failed. No membership was created. Please try again.')
-          setStage('failure')
+          showFailure(dismissed ? 'Checkout was closed before payment. You can try again when ready.' : 'Payment failed. No membership was created. Please try again.')
         },
       })
     } catch (cause) {
@@ -150,8 +160,7 @@ export function PlanCheckout({ open, onOpenChange, member, initialPlan, onSucces
         await showSuccess(completed.status === 'scheduled' ? 'Membership already created and scheduled.' : 'Membership already active.')
         return
       }
-      setFailure(cause instanceof Error ? cause.message : 'Payment failed. Please try again.')
-      setStage('failure')
+      showFailure(cause instanceof Error ? cause.message : 'Payment failed. Please try again.')
     }
   }
 

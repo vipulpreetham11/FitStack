@@ -31,6 +31,12 @@ beforeAll(async()=>{
  await db.exec(ownPaymentsPolicySql)
  const consolidatedPaymentsPolicySql=readFileSync(new URL('../supabase/migrations/20260913172040_consolidate_payments_select_policy.sql',import.meta.url),'utf8')
  await db.exec(consolidatedPaymentsPolicySql)
+ const lifecycleMigration=readFileSync(new URL('../supabase/migrations/20260916195535_deploy_membership_lifecycle_cron.sql',import.meta.url),'utf8')
+ const lifecycleFunctions=lifecycleMigration.slice(
+  lifecycleMigration.indexOf('CREATE OR REPLACE FUNCTION public.run_membership_lifecycle()'),
+  lifecycleMigration.indexOf('CREATE OR REPLACE FUNCTION public.verify_membership_cron_secret')
+ )
+ await db.exec(lifecycleFunctions)
  await db.exec(`
  INSERT INTO auth.users(id) VALUES ('${owner}'),('${user}'),('${otherUser}'),('${rec}'),('${superUser}'),('${devUser}');
  INSERT INTO public.profiles(id,full_name,phone,is_super_admin) VALUES
@@ -139,10 +145,31 @@ describe('V1 SQL',()=>{
  })
  it('expires current membership before activating renewal',async()=>{
  await db.exec(`UPDATE public.memberships SET end_date=(now() AT TIME ZONE 'Asia/Kolkata')::date-1,start_date=(now() AT TIME ZONE 'Asia/Kolkata')::date-30 WHERE member_id='${member}' AND status='active';
- UPDATE public.memberships SET start_date=(now() AT TIME ZONE 'Asia/Kolkata')::date,end_date=(now() AT TIME ZONE 'Asia/Kolkata')::date+29 WHERE member_id='${member}' AND status='scheduled';
- SELECT public.process_daily_memberships();`)
+ UPDATE public.memberships SET start_date=(now() AT TIME ZONE 'Asia/Kolkata')::date,end_date=(now() AT TIME ZONE 'Asia/Kolkata')::date+29 WHERE member_id='${member}' AND status='scheduled';`)
+ const lifecycle=await db.query('SELECT public.run_membership_lifecycle() AS result')
+ expect((lifecycle.rows[0] as {result:{expired:number;activated:number;resumed:number;errors:string[]}}).result).toMatchObject({expired:1,activated:1,resumed:0,errors:[]})
  expect(await scalar(`SELECT count(*)::int FROM public.memberships WHERE member_id='${member}' AND status='active'`)).toBe(1)
  expect(await scalar(`SELECT count(*)::int FROM public.memberships WHERE member_id='${member}' AND status='expired'`)).toBe(1)
+ expect(await scalar(`SELECT details->>'reason' FROM public.membership_events WHERE membership_id IN (SELECT id FROM public.memberships WHERE member_id='${member}' AND status='expired') AND event_type='expired' ORDER BY created_at DESC LIMIT 1`)).toBe('Auto-expired by system')
+ })
+ it('auto-resumes a completed freeze without extending the end date twice',async()=>{
+ const frozenMembership=id(50), freeze=id(51)
+ await db.exec('BEGIN')
+ try {
+  await db.exec(`INSERT INTO public.memberships(id,gym_id,member_id,plan_id,status,start_date,end_date,original_end_date,frozen_at,frozen_until,freeze_count)
+  VALUES('${frozenMembership}','${gym}','${member2}','${plan}','frozen',CURRENT_DATE-10,CURRENT_DATE+20,CURRENT_DATE+18,now()-interval '2 days',CURRENT_DATE,1);
+  INSERT INTO public.membership_freezes(id,gym_id,membership_id,frozen_at,planned_days)
+  VALUES('${freeze}','${gym}','${frozenMembership}',now()-interval '2 days',2);`)
+  const lifecycle=await db.query('SELECT public.run_membership_lifecycle() AS result')
+  expect((lifecycle.rows[0] as {result:{resumed:number;errors:string[]}}).result).toMatchObject({resumed:1,errors:[]})
+  expect(await scalar(`SELECT status FROM public.memberships WHERE id='${frozenMembership}'`)).toBe('active')
+  expect(await scalar(`SELECT end_date=CURRENT_DATE+20 FROM public.memberships WHERE id='${frozenMembership}'`)).toBe(true)
+  expect(await scalar(`SELECT total_freeze_days FROM public.memberships WHERE id='${frozenMembership}'`)).toBe(2)
+  expect(await scalar(`SELECT actual_days FROM public.membership_freezes WHERE id='${freeze}'`)).toBe(2)
+  expect(await scalar(`SELECT details->>'reason' FROM public.membership_events WHERE membership_id='${frozenMembership}' AND event_type='resumed'`)).toBe('Auto-resumed by system after freeze ended')
+ } finally {
+  await db.exec('ROLLBACK')
+ }
  })
  it('reschedules renewal after a long extension while preserving original history',async()=>{
  await db.exec(`INSERT INTO public.memberships(gym_id,member_id,plan_id,status,start_date,end_date,original_end_date) VALUES('${gym}','${member}','${plan}','scheduled',CURRENT_DATE+30,CURRENT_DATE+59,CURRENT_DATE+59);

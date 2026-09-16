@@ -84,4 +84,10 @@ describe('Razorpay Edge Function responses', () => {
     expect(paymentsHookSource).not.toContain('isPaymentDevMode')
     expect(indexHtml).toContain('src="https://checkout.razorpay.com/v1/checkout.js"')
   })
+
+  it('accepts Razorpay success from the payment id and keeps webhook confirmation in the background', () => {
+    expect(checkoutSource).toContain('if (!response.razorpay_payment_id)')
+    expect(checkoutSource).toContain("toast.success('Payment successful! Membership activated.')")
+    expect(checkoutSource).toContain('handlePaymentSuccess(result.paymentId).then')
+  })
 })

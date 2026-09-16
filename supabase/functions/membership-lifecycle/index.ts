@@ -339,6 +339,20 @@ async function cancelMembership(admin: AdminClient, actorId: string, body: JsonR
   }
 }
 
+async function isAuthorizedCronRequest(admin: AdminClient, authorization: string | null) {
+  const secret = authorization?.startsWith('Bearer ') ? authorization.slice(7) : ''
+  if (!secret) return false
+  const { data, error } = await admin.rpc('verify_membership_cron_secret', { p_secret: secret })
+  if (error) throw error
+  return data === true
+}
+
+async function processDailyMemberships(admin: AdminClient) {
+  const { data, error } = await admin.rpc('run_membership_lifecycle')
+  if (error) throw error
+  return data ?? { expired: 0, activated: 0, resumed: 0, errors: [] }
+}
+
 Deno.serve(async req => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders })
   if (req.method !== 'POST') return json({ error: 'Method not allowed' }, 405)
@@ -347,15 +361,24 @@ Deno.serve(async req => {
     const token = authorization?.startsWith('Bearer ') ? authorization.slice(7) : ''
     if (!token) throw new HttpError('Sign in required', 401)
     const url = Deno.env.get('SUPABASE_URL') ?? ''
-    const publishableKey = envKey('SUPABASE_PUBLISHABLE_KEYS', 'SUPABASE_PUBLISHABLE_KEY', 'SUPABASE_ANON_KEY')
     const secretKey = envKey('SUPABASE_SECRET_KEYS', 'SUPABASE_SECRET_KEY', 'SUPABASE_SERVICE_ROLE_KEY')
-    if (!url || !publishableKey || !secretKey) throw new HttpError('Function is not configured', 500)
+    if (!url || !secretKey) throw new HttpError('Function is not configured', 500)
+    const body = await req.json() as JsonRecord
+    const admin = createClient(url, secretKey, { auth: { persistSession: false, autoRefreshToken: false } })
+
+    if (body.action === 'process-daily' || body.action === undefined) {
+      if (!await isAuthorizedCronRequest(admin, authorization)) throw new HttpError('Unauthorized', 401)
+      const result = await processDailyMemberships(admin)
+      console.log('membership-lifecycle completed:', result)
+      return json(result)
+    }
+
+    const publishableKey = envKey('SUPABASE_PUBLISHABLE_KEYS', 'SUPABASE_PUBLISHABLE_KEY', 'SUPABASE_ANON_KEY')
+    if (!publishableKey) throw new HttpError('Function is not configured', 500)
     const authClient = createClient(url, publishableKey, { auth: { persistSession: false, autoRefreshToken: false } })
     const { data: { user }, error: authError } = await authClient.auth.getUser(token)
     if (authError || !user) throw new HttpError('Sign in required', 401)
-    const body = await req.json() as JsonRecord
     const gymId = String(body.gymId ?? '')
-    const admin = createClient(url, secretKey, { auth: { persistSession: false, autoRefreshToken: false } })
     const [{ data: actor }, { data: profile }, { data: gym }] = await Promise.all([
       admin.from('gym_members').select('id,role').eq('gym_id', gymId).eq('profile_id', user.id).eq('is_active', true).maybeSingle(),
       admin.from('profiles').select('is_super_admin').eq('id', user.id).maybeSingle(),

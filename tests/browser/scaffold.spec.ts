@@ -361,6 +361,50 @@ test('member payment history requests only the current gym-member payments', asy
  expect(paymentRequests).toBeGreaterThan(0)
 })
 
+test('quick check-in searches members and records an authorized manual attendance', async ({ page }) => {
+ const memberId='00000000-0000-4000-8000-000000000160'
+ const functionCalls:{p_gym_id:string;p_member_id:string}[]=[]
+ let checkedIn=false
+ await page.route('**/rest/v1/gym_members*', route => {
+  const requestUrl=new URL(route.request().url())
+  const select=requestUrl.searchParams.get('select') ?? ''
+  expect(select).not.toContain('*')
+  expect(select).not.toContain('qr_secret')
+  expect(requestUrl.searchParams.get('gym_id')).toBe('eq.preview')
+  expect(requestUrl.searchParams.get('role')).toBe('eq.member')
+  expect(requestUrl.searchParams.get('is_active')).toBe('eq.true')
+  expect(requestUrl.searchParams.get('profiles.or')).toContain('full_name.ilike.%pad%')
+  return route.fulfill({contentType:'application/json',body:JSON.stringify([{
+   id:memberId,role:'member',is_active:true,
+   profiles:{full_name:'Padmanabha Simha Pilli',phone:'9876543210',avatar_url:null},
+   memberships:[{id:'00000000-0000-4000-8000-000000000161',status:'active',start_date:'2026-09-01',end_date:'2026-10-01',plan_id:'00000000-0000-4000-8000-000000000162',membership_plans:{name:'Premium'}}],
+  }])})
+ })
+ await page.route('**/rest/v1/attendance*', route => route.fulfill({contentType:'application/json',body:JSON.stringify(checkedIn?[{
+  id:'00000000-0000-4000-8000-000000000163',gym_id:'preview',member_id:memberId,check_in_at:new Date().toISOString(),check_out_at:null,
+  method:'manual',device_id:null,checked_in_by:'preview',created_at:new Date().toISOString(),
+  member:{id:memberId,member_code:'PAD0160',profiles:{full_name:'Padmanabha Simha Pilli',avatar_url:null}},
+ }]:[]) }))
+ await page.route('**/rest/v1/rpc/manual_member_checkin', async route => {
+  functionCalls.push(route.request().postDataJSON())
+  checkedIn=true
+  return route.fulfill({contentType:'application/json',body:JSON.stringify({result:'allowed',attendance_id:'00000000-0000-4000-8000-000000000163',checked_in_at:new Date().toISOString()})})
+ })
+
+ await page.goto('/login')
+ await page.locator('summary').click()
+ await page.getByRole('button',{name:'owner',exact:true}).click()
+ await page.evaluate(()=>{history.pushState({},'','/admin/attendance');window.dispatchEvent(new PopStateEvent('popstate'))})
+ await expect(page.getByText('Quick Check-In',{exact:true})).toBeVisible()
+ await page.getByLabel('Search members for check-in').fill('pad')
+ await expect(page.getByText('Padmanabha Simha Pilli').first()).toBeVisible()
+ await expect(page.getByText('Premium').first()).toBeVisible()
+ await page.getByRole('button',{name:'Check In'}).click()
+ await expect(page.getByText('Checked in ✓')).toBeVisible()
+ await expect(page.getByText('Currently Checked In',{exact:true})).toBeVisible()
+ expect(functionCalls).toEqual([{p_gym_id:'preview',p_member_id:memberId}])
+})
+
 test('payment settings save credentials through the authorized Edge Function', async ({ page }) => {
  let directGymWrites=0
  const functionCalls:{gym_id:string;key_id?:string;key_secret?:string;webhook_secret?:string}[]=[]
@@ -427,8 +471,8 @@ test('missing Razorpay credentials fall back to the development checkout RPC', a
  await page.getByRole('button',{name:'Buy Now'}).click()
  await expect(page.getByText('Development mode',{exact:true})).toHaveCount(0)
  await page.getByRole('button',{name:/^Pay /}).click()
- await expect(page.getByRole('heading',{name:'Payment successful'})).toBeVisible()
- await expect(page.getByText('The membership and invoice are ready.')).toBeVisible()
+ await expect(page.getByText('Payment successful! Membership activated.')).toBeVisible()
+ await expect(page.getByRole('dialog')).toHaveCount(0)
  expect(rpcCalls.filter(call=>call.p_preview)).not.toHaveLength(0)
  expect(rpcCalls.filter(call=>!call.p_preview)).toHaveLength(1)
  expect(rpcCalls.at(-1)?.p_preview).toBe(false)
@@ -478,7 +522,8 @@ test('configured Razorpay checkout uses the Edge Function and opens the real mod
  await page.evaluate(()=>{history.pushState({},'','/member/plans');window.dispatchEvent(new PopStateEvent('popstate'))})
  await page.getByRole('button',{name:'Buy Now'}).click()
  await page.getByRole('button',{name:/^Pay /}).click()
- await expect(page.getByRole('heading',{name:'Payment successful'})).toBeVisible()
+ await expect(page.getByText('Payment successful! Membership activated.')).toBeVisible()
+ await expect(page.getByRole('dialog')).toHaveCount(0)
  await expect(page.getByRole('heading',{name:'Payment not completed'})).toHaveCount(0)
  expect(edgeCalls).toEqual([{
   gym_id:'preview',member_id:'preview',plan_id:plan.id,start_date:expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/),promo_code:null,
@@ -488,6 +533,40 @@ test('configured Razorpay checkout uses the Edge Function and opens the real mod
   key:'rzp_test_fitstack',amount:525000,currency:'INR',order_id:'order_fitstack_test',
   name:'FitStack Studio',description:'Premium',theme:{color:'#171717'},
  })
+})
+
+test('dismissed Razorpay checkout shows a failure toast and keeps a retry path', async ({ page }) => {
+ const plan={
+  id:'00000000-0000-4000-8000-000000000135',gym_id:'preview',name:'Premium',description:null,
+  price:5000,duration_type:'months',duration_value:1,features:[],max_freezes:0,max_freeze_days:null,
+  allow_future_start:true,is_active:true,sort_order:0,created_by:null,created_at:'2026-09-13T10:00:00Z',updated_at:'2026-09-13T10:00:00Z',
+ }
+ await page.addInitScript(()=>{
+  ;(window as any).Razorpay=function(options:any){return {on:()=>undefined,open:()=>options.modal.ondismiss()}}
+ })
+ await page.route('**/rest/v1/membership_plans*', route => route.fulfill({contentType:'application/json',body:JSON.stringify([plan])}))
+ await page.route('**/rest/v1/payments*', route => route.fulfill({contentType:'application/json',body:'[]'}))
+ await page.route('**/rest/v1/rpc/simulate_payment_checkout', route => route.fulfill({contentType:'application/json',body:JSON.stringify({
+  amount:5000,discountAmount:0,taxableAmount:5000,gstRate:5,cgstAmount:125,sgstAmount:125,
+  totalAmount:5250,totalPaise:525000,promoCodeId:null,promoCode:null,currency:'INR',simulated:false,
+  orderId:null,paymentId:null,razorpayKeyId:null,captured:false,
+ })}))
+ await page.route('**/functions/v1/create-razorpay-order', route => route.fulfill({contentType:'application/json',body:JSON.stringify({
+  free:false,orderId:'order_fitstack_dismissed',amount:525000,totalPaise:525000,currency:'INR',
+  keyId:'rzp_test_fitstack',paymentId:'00000000-0000-4000-8000-000000000136',
+ })}))
+
+ await page.goto('/login')
+ await page.locator('summary').click()
+ await page.getByRole('button',{name:'member',exact:true}).click()
+ await page.evaluate(()=>{history.pushState({},'','/member/plans');window.dispatchEvent(new PopStateEvent('popstate'))})
+ await page.getByRole('button',{name:'Buy Now'}).click()
+ await page.getByRole('button',{name:/^Pay /}).click()
+
+ const message='Checkout was closed before payment. You can try again when ready.'
+ await expect(page.getByText(message).last()).toBeVisible()
+ await expect(page.getByRole('heading',{name:'Payment not completed'})).toBeVisible()
+ await expect(page.getByRole('button',{name:/Try again/})).toBeVisible()
 })
 
 test('a free Edge Function checkout succeeds without opening Razorpay', async ({ page }) => {
@@ -516,7 +595,8 @@ test('a free Edge Function checkout succeeds without opening Razorpay', async ({
  await page.evaluate(()=>{history.pushState({},'','/member/plans');window.dispatchEvent(new PopStateEvent('popstate'))})
  await page.getByRole('button',{name:'Buy Now'}).click()
  await page.getByRole('button',{name:'Activate free plan'}).click()
- await expect(page.getByRole('heading',{name:'Payment successful'})).toBeVisible()
+ await expect(page.getByText('Payment successful! Membership activated.')).toBeVisible()
+ await expect(page.getByRole('dialog')).toHaveCount(0)
  expect(await page.evaluate(()=>(window as any).__fitstackRazorpayOpened)).toBe(0)
 })
 
@@ -553,8 +633,8 @@ test('a lost checkout response reconciles an active membership instead of showin
  await page.evaluate(()=>{history.pushState({},'','/member/plans');window.dispatchEvent(new PopStateEvent('popstate'))})
  await page.getByRole('button',{name:'Buy Now'}).click()
  await page.getByRole('button',{name:/^Pay /}).click()
- await expect(page.getByRole('heading',{name:'Payment successful'})).toBeVisible()
- await expect(page.getByText('Membership already active.')).toBeVisible()
+ await expect(page.getByText('Payment successful! Membership activated.')).toBeVisible()
+ await expect(page.getByRole('dialog')).toHaveCount(0)
  await expect(page.getByRole('heading',{name:'Payment not completed'})).toHaveCount(0)
  expect(mutationCalls).toBeGreaterThan(0)
 })

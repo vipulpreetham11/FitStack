@@ -9,3 +9,7 @@ verify_jwt = false
 
 [functions.weekly-backup]
 verify_jwt = false
+
+[functions.membership-lifecycle]
+# Both browser actions and the cron request are authenticated inside the function.
+verify_jwt = false
